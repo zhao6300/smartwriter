@@ -116,6 +116,10 @@ export default function AdminDashboard() {
                 <label style={{ fontSize: '0.85rem' }}>API Key (超管出资提供的顶层密钥)</label>
                 <input type="password" value={newModel.api_key} onChange={e=>setNewModel({...newModel, api_key: e.target.value})} required placeholder="sk-..." />
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <input type="checkbox" id="is_vision" checked={newModel.is_vision || false} onChange={e=>setNewModel({...newModel, is_vision: e.target.checked})} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
+                <label htmlFor="is_vision" style={{ fontSize: '0.9rem', cursor: 'pointer', fontWeight: 600, color: 'var(--text-main)' }}>👁️ 作为视觉多模态大模型</label>
+              </div>
               <button type="submit" className="btn btn-primary" style={{ marginTop: '0.5rem', background: '#10b981' }}>灌输至模型池</button>
             </form>
           </div>
@@ -124,6 +128,7 @@ export default function AdminDashboard() {
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', whiteSpace: 'nowrap' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-color)', borderBottom: '2px solid var(--border-color)' }}>
+                  <th style={{ padding: '1rem' }}>类型</th>
                   <th style={{ padding: '1rem' }}>模型名称</th>
                   <th style={{ padding: '1rem' }}>底层标识号</th>
                   <th style={{ padding: '1rem' }}>归属网关</th>
@@ -131,9 +136,12 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {models.length === 0 && <tr><td colSpan="4" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>平台内暂无模型供给，用户处于断电停摆状态！</td></tr>}
+                {models.length === 0 && <tr><td colSpan="5" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>平台内暂无模型供给，用户处于断电停摆状态！</td></tr>}
                 {models.map(m => (
                   <tr key={m.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '1rem', textAlign: 'center' }}>
+                      {m.is_vision ? <span title="视觉模型">👁️</span> : <span title="文本模型">💬</span>}
+                    </td>
                     <td style={{ padding: '1rem', fontWeight: 600 }}>{m.name}</td>
                     <td style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--primary-color)' }}>{m.model}</td>
                     <td style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>{m.base_url}</td>

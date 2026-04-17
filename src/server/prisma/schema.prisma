@@ -19,6 +19,7 @@ model User {
   Templates     Template[]
   ToolPlugins   ToolPlugin[]
   OperationLogs OperationLog[]
+  KnowledgeBases KnowledgeBase[]
 }
 
 model AiConfig {
@@ -59,7 +60,29 @@ model SystemAiModel {
   model      String
   base_url   String
   api_key    String
+  is_vision  Boolean  @default(false)
   created_at DateTime @default(now())
+}
+
+model KnowledgeBase {
+  id          String              @id @default(uuid())
+  user_id     String
+  name        String
+  description String?
+  created_at  DateTime            @default(now())
+  updated_at  DateTime            @updatedAt
+  user        User                @relation(fields: [user_id], references: [id])
+  documents   KnowledgeDocument[]
+}
+
+model KnowledgeDocument {
+  id          String        @id @default(uuid())
+  kb_id       String
+  type        String        // "TEXT", "IMAGE"
+  content     String?       // For TEXT
+  url         String?       // For IMAGE
+  created_at  DateTime      @default(now())
+  kb          KnowledgeBase @relation(fields: [kb_id], references: [id], onDelete: Cascade)
 }
 
 model ToolPlugin {
