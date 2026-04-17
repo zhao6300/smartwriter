@@ -20,14 +20,19 @@ export const webSearchTool = {
   execute: async ({ query }: { query: string }): Promise<string> => {
     try {
       console.log(`[Tool] 正在执行网络搜索: ${query}`);
-      const res = await fetch('https://lite.duckduckgo.com/lite/', {
-        method: 'POST',
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时强制熔断
+
+      // 使用不易受特殊网络屏蔽的国际大众搜索引擎(Yahoo)做备用检索源
+      const res = await fetch(`https://search.yahoo.com/search?p=${encodeURIComponent(query)}`, {
+        method: 'GET',
         headers: { 
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         },
-        body: `q=${encodeURIComponent(query)}`
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 

@@ -12,10 +12,17 @@ export default function Dashboard() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState('card');
+  const [logs, setLogs] = useState([]);
 
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  useEffect(() => {
+    if (viewMode === 'log') {
+      fetchLogs();
+    }
+  }, [viewMode]);
 
   if (!user) {
     setTimeout(() => navigate('/login'), 0);
@@ -26,6 +33,15 @@ export default function Dashboard() {
     try {
       const res = await axios.get('/project');
       setProjects(res.data);
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const fetchLogs = async () => {
+    try {
+      const res = await axios.get('/logs?global=true');
+      setLogs(res.data);
     } catch(e) {
       console.error(e);
     }
@@ -95,6 +111,16 @@ export default function Dashboard() {
                }}
             >
                📄 列表
+            </button>
+            <button 
+               onClick={() => setViewMode('log')} 
+               style={{ 
+                 background: viewMode === 'log' ? 'var(--primary-color)' : 'transparent', 
+                 color: viewMode === 'log' ? 'white' : 'var(--text-muted)',
+                 border: 'none', padding: '0.5rem 1rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600, transition: 'all 0.2s'
+               }}
+            >
+               📜 操作日志
             </button>
           </div>
         </div>
@@ -169,6 +195,43 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        
+        {viewMode === 'log' && (
+          <div className="card" style={{ padding: '0', overflow: 'hidden', margin: 0 }}>
+            <div style={{ background: 'var(--code-bg)', padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)' }}>
+               <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-main)' }}>近期活动时光轴</h3>
+            </div>
+            <div style={{ padding: '1.5rem', maxHeight: '600px', overflowY: 'auto' }}>
+              {logs.length === 0 ? (
+                 <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>暂无操作痕迹</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {logs.map((L, i) => (
+                    <div key={L.id} style={{ display: 'flex', gap: '1.5rem', position: 'relative' }}>
+                       {i !== logs.length - 1 && <div style={{ position: 'absolute', left: '16px', top: '30px', bottom: '-20px', width: '2px', background: 'var(--border-color)', zIndex: 1 }} />}
+                       
+                       <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'var(--code-bg)', border: '2px solid var(--primary-color)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}>
+                         <span style={{ fontSize: '0.8rem' }}>📌</span>
+                       </div>
+                       
+                       <div style={{ background: 'var(--code-bg)', padding: '1rem', borderRadius: '12px', flex: 1, border: '1px solid var(--border-color)' }}>
+                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                           <h4 style={{ margin: 0, color: 'var(--primary-color)' }}>{L.action}</h4>
+                           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{new Date(L.created_at).toLocaleString()}</span>
+                         </div>
+                         {L.details && (
+                           <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                             {L.details}
+                           </p>
+                         )}
+                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

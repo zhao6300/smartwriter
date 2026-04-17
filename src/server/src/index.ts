@@ -8,6 +8,7 @@ import projectRoutes from './routes/project';
 import adminRoutes from './routes/admin';
 import templateRoutes from './routes/template';
 import toolsRoutes from './routes/tools';
+import logsRoutes from './routes/logs';
 
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -47,6 +48,7 @@ app.use('/api/project', projectRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/template', templateRoutes);
 app.use('/api/tools', toolsRoutes);
+app.use('/api/logs', logsRoutes);
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });

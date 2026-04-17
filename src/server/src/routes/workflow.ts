@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
 import { getOpenAIClient } from '../utils/openai';
+import { logAction } from '../utils/logger';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -100,15 +101,42 @@ ${existingSection}
       }
     }
     
+    let finalSavedOutline = outlineText;
+    try {
+      const newlyGenerated = JSON.parse(outlineText);
+      const newItems = Array.isArray(newlyGenerated.outlines) ? newlyGenerated.outlines : (Array.isArray(newlyGenerated) ? newlyGenerated : [newlyGenerated]);
+      
+      if (existingVariants && existingVariants.length > 0) {
+        // Recover the full objects from the request, assuming frontend passes the full array if it has them.
+        // Wait, frontend only passes {variantName, core_idea}. We can't save just that.
+        // The DB article already has the old outlines. We should just merge into them!
+        const existingArticle = await prisma.article.findUnique({ where: { id: articleId } });
+        if (existingArticle && existingArticle.outline) {
+          const parsedOld = JSON.parse(existingArticle.outline);
+          const oldItems = Array.isArray(parsedOld.outlines) ? parsedOld.outlines : (Array.isArray(parsedOld) ? parsedOld : []);
+          
+          finalSavedOutline = JSON.stringify({ outlines: [...oldItems, ...newItems] });
+        }
+      }
+    } catch(e) {
+      console.warn("解析合成大纲异常，采用覆盖策略", e);
+    }
+
     const article = await prisma.article.update({
       where: { id: articleId },
       data: {
         topic,
-        outline: outlineText,
+        outline: finalSavedOutline,
         status: 'OUTLINE_DONE',
       }
     });
 
+    await logAction(req.user!.id, "智能发散推演大纲", `为 ${topic} 脑爆了新的骨架分支`, article.id);
+
+
+    // To remain backward compatible for frontend which just concatenates the delta array, 
+    // we should return the JUST newly generated data, OR the frontend should replace instead of merge.
+    // The previous frontend uses `setOutlines(prev => [...prev, ...parsedOutlines])` assuming backend returns ONLY the delta.
     res.json({ articleId: article.id, outline: JSON.parse(outlineText) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -119,20 +147,24 @@ import { getActiveTools } from '../utils/tools';
 
 router.post('/generate', async (req: AuthRequest, res) => {
   try {
-    const { articleId, final_outline, selectedTools } = req.body;
+    const { articleId, final_outline, customStyle, selectedTools } = req.body;
     const { openai, model_name } = await getOpenAIClient(req.user!.id);
     
     // Tools parsing
     const agentTools = getActiveTools(selectedTools || []);
     const openaiTools = agentTools.length > 0 ? agentTools.map(t => t.schema) : undefined;
 
-    const prompt = `你是资深金牌公众号撰稿人。请根据大纲撰写公众号推文。
-你可以在撰写前通过提供的工具检索最新资料。你可以使用Markdown排版。多加金句。
+    const prompt = `你是资深金牌公众号撰稿人。请严格根据以下大纲与风格设定撰写推文。
+【极其重要的高优指令】文风设定：${customStyle || '暂无特定风格设定，请用专业生动的自媒体口吻'}
+你必须100%像素级模仿上述文风分析中刻画的语言习惯、语气词、修辞手法和句子长短节奏来行文。
+你可以在撰写前通过提供的工具检索最新资料。请使用Markdown排版。
 大纲内容如下：
 ${JSON.stringify(final_outline, null, 2)}`;
 
     let messages: any[] = [{ role: 'system', content: prompt }];
     let finalContent = "";
+
+    await logAction(req.user!.id, "深度整合最终排版起草", `结合最终定制大纲进行长文生成`, articleId);
 
     // Set headers for SSE immediately to avoid timeout
     res.setHeader('Content-Type', 'text/event-stream');
@@ -143,18 +175,46 @@ ${JSON.stringify(final_outline, null, 2)}`;
     while (maxLoops > 0) {
       maxLoops--;
       
-      const completion = await openai.chat.completions.create({
+      const stream = await openai.chat.completions.create({
         model: model_name,
         messages,
         tools: openaiTools,
         tool_choice: "auto",
-        stream: false 
+        stream: true 
       });
 
-      const msg = completion.choices[0].message;
+      let contentBuffer = "";
+      let toolCallBuffer: any = {};
+      let hasToolCalls = false;
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+
+        if (delta.content) {
+          contentBuffer += delta.content;
+          res.write(`data: ${JSON.stringify({ text: delta.content })}\n\n`);
+        }
+
+        if (delta.tool_calls) {
+          hasToolCalls = true;
+          for (const tc of delta.tool_calls) {
+            if (!toolCallBuffer[tc.index]) {
+              toolCallBuffer[tc.index] = { id: tc.id, type: 'function', function: { name: tc.function?.name || "", arguments: "" } };
+            }
+            if (tc.function?.name) toolCallBuffer[tc.index].function.name += tc.function.name;
+            if (tc.function?.arguments) toolCallBuffer[tc.index].function.arguments += tc.function.arguments;
+          }
+        }
+      }
+
+      const msg: any = { role: "assistant", content: contentBuffer || null };
+      if (hasToolCalls) {
+        msg.tool_calls = Object.values(toolCallBuffer);
+      }
       messages.push(msg);
 
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
+      if (hasToolCalls) {
         // Send a status update to frontend
         const toolNames = msg.tool_calls.map((t: any) => t.function.name).join(', ');
         res.write(`data: ${JSON.stringify({ text: `\n\n> 🤖 AI 正在使用工具 [${toolNames}] 检索资料...\n\n` })}\n\n`);
@@ -177,9 +237,8 @@ ${JSON.stringify(final_outline, null, 2)}`;
           });
         }
       } else {
-        // AI yielded final text 
-        finalContent = msg.content || "";
-        res.write(`data: ${JSON.stringify({ text: finalContent })}\n\n`);
+        // AI yielded final text completely
+        finalContent = contentBuffer || "";
         break; // break the loop and finish
       }
     }

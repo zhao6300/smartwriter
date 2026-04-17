@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
+import { logAction } from '../utils/logger';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -21,7 +22,7 @@ router.post('/register', async (req, res) => {
     const user = await prisma.user.create({
       data: { username, password_hash, is_admin }
     });
-
+    await logAction(user.id, "注册新账号", "欢迎正式加入工作台");
     res.json({ id: user.id, username: user.username, is_admin: user.is_admin });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -38,6 +39,7 @@ router.post('/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, username: user.username, is_admin: user.is_admin }, JWT_SECRET, { expiresIn: '1d' });
+    await logAction(user.id, "系统登录", "通过系统密码统一安全准入验证");
     res.json({ token, user: { id: user.id, username: user.username, is_admin: user.is_admin } });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

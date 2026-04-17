@@ -125,7 +125,8 @@ ${rawText}
     "section_rhythm": [
         { "role": "段落战术角色", "purpose": "设计意图" }
     ],
-    "key_techniques": ["关键技法1", "关键技巧2"]
+    "key_techniques": ["关键技法1", "关键技巧2"],
+    "style_analysis": "极高精度的深层文风切片分析：明确它的行文呼吸感与长短句分配规律？喜爱使用怎样的特定标点或语气词表达主观情绪？偏好哪些段落排版习惯（如爱用长段引经据典，或爱用单句成段斩钉截铁）？使用了哪些典型修辞手法（如高频运用反问设问、或是大白话讲道理）？（务必生成一段150字以上的详尽【系统级指令描写】，能让大模型根据这段描述就能在高仿这套笔触和发音口吻）"
   },
   "original": {
     "core_idea": "抽离出来的文章核心思想及主旨",
@@ -162,7 +163,7 @@ ${rawText}
       data: {
         user_id: req.user!.id,
         name: parsedExtract.abstract.pattern_name || '逆向提取模板',
-        style: '',
+        style: parsedExtract.abstract.style_analysis || '',
         framework: JSON.stringify(parsedExtract)
       }
     });

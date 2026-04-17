@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { requireAuth, AuthRequest } from '../middlewares/auth';
+import { logAction } from '../utils/logger';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -30,6 +31,7 @@ router.post('/', async (req: AuthRequest, res) => {
         status: 'DRAFT',
       }
     });
+    await logAction(req.user!.id, "新建独立创作画板", "初始化了一篇空白手稿");
     res.json({ id: project.id });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

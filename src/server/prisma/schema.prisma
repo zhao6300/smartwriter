@@ -18,6 +18,7 @@ model User {
   Articles      Article[]
   Templates     Template[]
   ToolPlugins   ToolPlugin[]
+  OperationLogs OperationLog[]
 }
 
 model AiConfig {
@@ -69,6 +70,16 @@ model ToolPlugin {
   category   String   // "Search" | "Data" | "Utilities"
   config     String?  // JSON string (e.g. { mcp_endpoint: "..." })
   is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  user       User     @relation(fields: [user_id], references: [id])
+}
+
+model OperationLog {
+  id         String   @id @default(uuid())
+  user_id    String
+  project_id String?
+  action     String   
+  details    String?  
   created_at DateTime @default(now())
   user       User     @relation(fields: [user_id], references: [id])
 }

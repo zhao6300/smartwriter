@@ -227,3 +227,172 @@ input:focus, textarea:focus, select:focus {
     font-size: 0.85rem;
   }
 }
+
+/* ========= WeChat Base ========= */
+.typo-wechat-base {
+  font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Tahoma, "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 1px;
+  line-height: 2;
+}
+.typo-wechat-base p { margin-bottom: 1.5em; text-align: center; }
+.typo-wechat-base h3 { font-size: 1.1rem; font-weight: bold; margin: 1.5em 0 0.8em; }
+
+/* --- 1. 商务简约 (Elegant Green) --- */
+.typo-wechat-elegant { color: #3d3d3d; }
+.typo-wechat-elegant h2 {
+  font-size: 1.2rem; color: #10b981; text-align: center;
+  border: none; position: relative; margin: 2.5em 0 1.2em;
+}
+.typo-wechat-elegant h2::before,
+.typo-wechat-elegant h2::after {
+  content: ''; display: inline-block; width: 30px; height: 1px;
+  background: #10b981; vertical-align: middle; margin: 0 12px;
+}
+.typo-wechat-elegant blockquote {
+  background: #f0fdf4; border-left: 4px solid #10b981;
+  padding: 1em 1.2em; color: #555; border-radius: 6px; margin: 1.5em 0;
+}
+.typo-wechat-elegant strong { color: #10b981; }
+.typo-wechat-elegant hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, #10b981, transparent); margin: 2em 0; }
+
+/* --- 2. 活力鲜橙 (Vibrant Orange) --- */
+.typo-wechat-vibrant { color: #2d2d2d; }
+.typo-wechat-vibrant h2 {
+  font-size: 1.2rem; color: #fff; text-align: center;
+  background: linear-gradient(135deg, #f97316, #fb923c); padding: 0.5em 1em;
+  border-radius: 100px; display: inline-block; margin: 2em auto 1.2em;
+  width: auto;
+}
+.typo-wechat-vibrant blockquote {
+  background: #fff7ed; border-left: 4px solid #f97316;
+  padding: 1em 1.2em; color: #7c2d12; border-radius: 6px; margin: 1.5em 0;
+}
+.typo-wechat-vibrant strong { color: #ea580c; }
+.typo-wechat-vibrant hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, #fb923c, transparent); margin: 2em 0; }
+
+/* --- 3. 科技蓝调 (Tech Blue) --- */
+.typo-wechat-tech { color: #1e293b; }
+.typo-wechat-tech h2 {
+  font-size: 1.15rem; color: #2563eb; text-align: left;
+  border-left: 4px solid #2563eb; padding-left: 12px; background: #eff6ff;
+  border-radius: 0 6px 6px 0; padding: 0.5em 1em 0.5em 12px;
+  margin: 2em 0 1.2em;
+}
+.typo-wechat-tech blockquote {
+  background: #f0f9ff; border-left: 3px solid #3b82f6;
+  padding: 1em 1.2em; color: #475569; border-radius: 4px; margin: 1.5em 0;
+  font-size: 0.92em;
+}
+.typo-wechat-tech strong { color: #1d4ed8; }
+.typo-wechat-tech hr { border: none; height: 1px; background: #cbd5e1; margin: 2em 0; }
+
+/* --- 4. 文艺清新 (Literary Rose) --- */
+.typo-wechat-literary { color: #4a4a4a; font-family: Georgia, "Songti SC", "SimSun", serif; }
+.typo-wechat-literary h2 {
+  font-size: 1.25rem; color: #be185d; text-align: center;
+  font-weight: 400; font-style: italic; border: none;
+  margin: 2.5em 0 1em; letter-spacing: 3px;
+}
+.typo-wechat-literary h2::before { content: '✦ '; font-style: normal; font-size: 0.7em; color: #ec4899; }
+.typo-wechat-literary h2::after  { content: ' ✦'; font-style: normal; font-size: 0.7em; color: #ec4899; }
+.typo-wechat-literary blockquote {
+  background: #fdf2f8; border-left: 3px solid #ec4899;
+  padding: 1em 1.2em; color: #831843; border-radius: 8px; margin: 1.5em 0;
+  font-style: italic;
+}
+.typo-wechat-literary strong { color: #be185d; font-weight: 600; }
+.typo-wechat-literary hr { border: none; text-align: center; margin: 2em 0; height: auto; background: none; }
+.typo-wechat-literary hr::before { content: '· · ·'; color: #ec4899; letter-spacing: 8px; font-size: 1.2em; }
+
+/* --- 5. 暗黑极客 (Dark Neon) --- */
+.typo-wechat-dark { color: #e2e8f0; background: #0f172a; padding: 2rem; border-radius: 8px; }
+.typo-wechat-dark h2 {
+  font-size: 1.2rem; color: #22d3ee; text-align: left;
+  border-bottom: 2px solid #22d3ee; padding-bottom: 0.4em;
+  margin: 2em 0 1em; font-family: "Courier New", monospace;
+}
+.typo-wechat-dark h3 { color: #a78bfa; }
+.typo-wechat-dark blockquote {
+  background: #1e293b; border-left: 3px solid #a78bfa;
+  padding: 1em 1.2em; color: #94a3b8; border-radius: 4px; margin: 1.5em 0;
+}
+.typo-wechat-dark strong { color: #34d399; }
+.typo-wechat-dark code { background: #1e293b; color: #22d3ee; }
+.typo-wechat-dark hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, #334155, transparent); margin: 2em 0; }
+
+/* Legacy compat alias */
+.typo-wechat { }
+
+
+.typo-zhihu {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  color: #121212;
+  letter-spacing: 0.5px;
+  line-height: 1.6;
+}
+.typo-zhihu p {
+  margin-bottom: 1.2em;
+}
+.typo-zhihu h2 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-top: 1.8em;
+  margin-bottom: 0.8em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #ebebeb;
+}
+.typo-zhihu h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.8em;
+}
+.typo-zhihu blockquote {
+  color: #444;
+  border-left: 3px solid #056de8;
+  padding-left: 1em;
+  margin: 1em 0;
+  background: #f6f6f6;
+  padding: 0.8em 1em;
+  border-radius: 4px;
+}
+.typo-zhihu strong {
+  font-weight: 600;
+  color: #121212;
+}
+
+.typo-default {
+  /* Inherit default app styling */
+}
+
+/* Word-style Ribbon Toolbar */
+.word-ribbon select {
+  font-family: inherit;
+}
+.word-ribbon button {
+  transition: background 0.1s, border-color 0.1s;
+}
+.word-ribbon button:hover {
+  background: rgba(99,102,241,0.08) !important;
+  border-color: var(--border-color) !important;
+}
+.word-ribbon select:focus {
+  border-color: var(--primary-color) !important;
+}
+
+@media (max-width: 768px) {
+  .word-ribbon {
+    padding: 3px 4px !important;
+  }
+  .word-ribbon select {
+    font-size: 11px !important;
+  }
+  .word-ribbon select[title="字体"] {
+    width: 90px !important;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

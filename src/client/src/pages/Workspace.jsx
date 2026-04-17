@@ -15,9 +15,11 @@ export default function Workspace() {
   const [topic, setTopic] = useState('');
   const [audience, setAudience] = useState('');
   const [style, setStyle] = useState('');
+  const [generateCount, setGenerateCount] = useState(1);
   
   const [outlines, setOutlines] = useState([]);
   const [articleId, setArticleId] = useState(null);
+  const [projectLogs, setProjectLogs] = useState([]);
   
   const [isGeneratingOutline, setIsGeneratingOutline] = useState(false);
   
@@ -34,6 +36,66 @@ export default function Workspace() {
   const [suggestingSection, setSuggestingSection] = useState(null);
   const [isGeneratingAllSections, setIsGeneratingAllSections] = useState(false);
   const [contentView, setContentView] = useState('rendered'); // 'rendered' | 'raw'
+  
+  const [typographyConfig, setTypographyConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem('agentTypoConfig');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return { preset: 'typo-default', align: 'left', fontFamily: 'inherit', fontSize: '1rem' };
+  });
+
+  const updateTypoConfig = (key, val) => {
+    setTypographyConfig(prev => {
+      const next = { ...prev, [key]: val };
+      localStorage.setItem('agentTypoConfig', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // Custom typography themes
+  const [customThemes, setCustomThemes] = useState(() => {
+    try {
+      const saved = localStorage.getItem('agentCustomThemes');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return [];
+  });
+  const [themeEditorOpen, setThemeEditorOpen] = useState(false);
+  const [editingTheme, setEditingTheme] = useState(null);
+
+  const defaultNewTheme = {
+    name: '我的自定义主题',
+    accentColor: '#6366f1',
+    headingStyle: 'left-border', // left-border | center | center-lines | pill
+    bodyColor: '#333333',
+    bgColor: '#ffffff',
+    blockquoteBg: '#f6f8fb',
+    strongColor: '#6366f1',
+    letterSpacing: '1px',
+    lineHeight: '1.8',
+  };
+
+  const saveCustomTheme = (theme) => {
+    const id = theme.id || ('custom-' + Date.now());
+    const updated = customThemes.filter(t => t.id !== id);
+    updated.push({ ...theme, id });
+    setCustomThemes(updated);
+    localStorage.setItem('agentCustomThemes', JSON.stringify(updated));
+    updateTypoConfig('preset', id);
+    setThemeEditorOpen(false);
+    setEditingTheme(null);
+  };
+
+  const deleteCustomTheme = (id) => {
+    const updated = customThemes.filter(t => t.id !== id);
+    setCustomThemes(updated);
+    localStorage.setItem('agentCustomThemes', JSON.stringify(updated));
+    if (typographyConfig.preset === id) updateTypoConfig('preset', 'typo-default');
+  };
+
+  const getCustomThemeById = (id) => customThemes.find(t => t.id === id);
+  const isCustomPreset = typographyConfig.preset.startsWith('custom-');
   
   // Templates state
   const [savedTemplates, setSavedTemplates] = useState([]);
@@ -58,6 +120,12 @@ export default function Workspace() {
     setArticleId(projectId);
     fetchProject();
   }, [projectId]);
+
+  useEffect(() => {
+    if (activePane === 'logs') {
+      fetchProjectLogs();
+    }
+  }, [activePane]);
 
   if (!user) {
     setTimeout(() => navigate('/login'), 0);
@@ -100,9 +168,12 @@ export default function Workspace() {
       setSavedTemplates(tempsRes.data);
 
       try {
-        const toolsRes = await axios.get('/tools');
-        setAvailableTools(toolsRes.data);
-        setSelectedToolsForGen(toolsRes.data.filter(t => t.is_active).map(t => t.name));
+        if (user?.id) {
+          axios.get('/tools').then(res => {
+            setAvailableTools(res.data);
+            setSelectedToolsForGen(res.data.filter(t => t.is_active).map(t => t.name));
+          }).catch(e => console.error("无法加载工具:", e));
+        }
       } catch (e) {
         console.error("加载工具列表异常", e);
       }
@@ -112,16 +183,27 @@ export default function Workspace() {
     }
   };
 
+  const fetchProjectLogs = async () => {
+    try {
+      const res = await axios.get(`/logs?projectId=${projectId}`);
+      setProjectLogs(res.data);
+    } catch(e) {
+      console.error("加载项目日志失败:", e);
+    }
+  };
+
   const generateOutline = async () => {
     if (!topic) return alert("主题不能为空");
     setIsGeneratingOutline(true);
-    setOutlines([]);
     try {
-      const { data } = await axios.post('/workflow/outline', { articleId: projectId, topic, audience, customStyle: style, selectedTools: selectedToolsForGen });
+      const { data } = await axios.post('/workflow/outline', { 
+        articleId: projectId, topic, audience, customStyle: style, selectedTools: selectedToolsForGen, generateCount,
+        existingVariants: outlines.map(o => ({ variantName: o.variantName, core_idea: o.core_idea }))
+      });
       const parsedOutlines = data.outline.outlines || data.outline;
       if (Array.isArray(parsedOutlines) && parsedOutlines.length > 0) {
-        setOutlines(parsedOutlines);
-        setActivePane('outline-0');
+        setOutlines(prev => [...prev, ...parsedOutlines]);
+        setActivePane(`outline-${outlines.length}`);
       } else {
         alert("格式解析异常，请重试或检查生成的 JSON 结构");
       }
@@ -137,20 +219,25 @@ export default function Workspace() {
     if (!topic) return alert("请先在第一步设定主题");
     setIsGeneratingOutline(true);
     try {
-      // Pass existing variants so AI generates a non-repetitive new one
+      const existing = Array.isArray(outlines) ? outlines : [];
+      const existingVariantsPayload = existing.map(o => ({ variantName: o?.variantName || '未知', core_idea: o?.core_idea || '' }));
+
       const { data } = await axios.post('/workflow/outline', {
         articleId: projectId, topic, audience, customStyle: style,
         selectedTools: selectedToolsForGen,
-        existingVariants: outlines.map(o => ({ variantName: o.variantName, core_idea: o.core_idea })),
+        existingVariants: existingVariantsPayload,
         generateCount: 1
       });
-      const parsed = data.outline.outlines || data.outline;
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Use the AI's own variantName directly — it's content-aware
-        const newVariant = parsed[0];
-        const merged = [...outlines, newVariant];
+      const parsed = data.outline?.outlines || data.outline;
+      const parsedArr = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+      
+      if (parsedArr.length > 0) {
+        const newVariant = parsedArr[0];
+        const merged = [...existing, newVariant];
         setOutlines(merged);
         setActivePane(`outline-${merged.length - 1}`);
+      } else {
+        alert("新增视角解析失败，AI 未返回有效数据。");
       }
     } catch (err) {
       alert("新增大纲失败: " + (err.response?.data?.error || err.message));
@@ -308,7 +395,7 @@ export default function Workspace() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${useAuthStore.getState().token}`
         },
-        body: JSON.stringify({ articleId, final_outline: outlineToUse, contentName: outlineName, selectedTools: selectedToolsForGen })
+        body: JSON.stringify({ articleId, final_outline: outlineToUse, contentName: outlineName, customStyle: style, selectedTools: selectedToolsForGen })
       });
 
       const reader = res.body.getReader();
@@ -664,50 +751,124 @@ export default function Workspace() {
       return (
         <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: 0, overflowY: 'auto' }}>
 
-          <h3 style={{ marginBottom: '1.5rem' }}>主要要求</h3>
-          <div style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: '1.8' }}>
-            在此填入你想创作的文章内核大方向与受众。大模型将在底层自动为你发散思维，
-            一次性推演并提取 <strong style={{color: 'var(--primary-color)'}}>3 个不同风格和切入视角的候选项大纲</strong>。
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+            <span style={{ fontSize: '1.5rem' }}>📝</span>
+            <h3 style={{ margin: 0 }}>核心构思 (Idea Definition)</h3>
           </div>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <div>
-               <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>文章核心主题 (必填)</label>
-               <input placeholder="例如：大模型技术是如何颠覆现代前端开发工作流的" value={topic} onChange={e => setTopic(e.target.value)} />
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: '1.6', fontSize: '0.9rem' }}>
+            在此确立您的文章主脉络。下达指令后，大模型将自动为你发散思维，
+            构建出<strong style={{color: 'var(--primary-color)'}}>逻辑缜密的骨干大纲</strong>。
+          </p>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            
+            <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', border: '1px solid var(--border-color)', borderLeft: '4px solid var(--primary-color)' }}>
+               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-main)' }}>
+                  🎯 核心主题 (必填)
+               </label>
+               <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>用具体的句子描述您想要创作的内容核心焦点，要求越具体越好。</span>
+               <input 
+                 placeholder="例如：大模型技术是如何颠覆现代前端开发工作流的，带来了哪些具体改变？" 
+                 value={topic} 
+                 onChange={e => setTopic(e.target.value)} 
+                 style={{ width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: '6px', border: '1px solid rgba(99,102,241,0.3)', background: 'var(--card-bg)', color: 'var(--text-main)', outline: 'none' }}
+               />
             </div>
-            <div>
-               <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>目标受众人群 (可选)</label>
-               <input placeholder="例如：已经有2年经验的 React 开发者" value={audience} onChange={e => setAudience(e.target.value)} />
+            
+            <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', border: '1px solid var(--border-color)', borderLeft: '4px solid #10b981' }}>
+               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-main)' }}>
+                  👥 目标受众 (可选)
+               </label>
+               <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>明确读者群体，大模型将自动调整整篇文章的对话深度与专业名词门槛。</span>
+               <input 
+                 placeholder="例如：拥有1-3年经验的初中级前端开发者，非全栈" 
+                 value={audience} 
+                 onChange={e => setAudience(e.target.value)} 
+                 style={{ width: '100%', padding: '0.75rem', fontSize: '0.9rem', borderRadius: '6px', border: '1px solid transparent', background: 'var(--card-bg)', color: 'var(--text-main)', outline: 'none', transition: '0.2s', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)' }}
+                 onFocus={e => e.target.style.border = '1px solid #10b981'}
+                 onBlur={e => e.target.style.border = '1px solid transparent'}
+               />
             </div>
-            <div>
-               <label style={{ fontSize: '0.85rem', fontWeight: 600 }}>期望基调风格或特定要求 (可选)</label>
-               <input placeholder="例如：语言要幽默风趣带点自黑，多讲干货" value={style} onChange={e => setStyle(e.target.value)} />
+
+            <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', border: '1px solid var(--border-color)', borderLeft: '4px solid #f59e0b', display: 'flex', flexDirection: 'column' }}>
+               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                 <div>
+                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-main)' }}>
+                      🎭 风格约束与排版要求 (可选)
+                   </label>
+                   <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                     如果你通过左侧【模板与套路中心】调用了文风模板，此框将被智能提取的指令级分析充满，可手动微调。
+                   </span>
+                 </div>
+               </div>
+               <textarea 
+                 placeholder="例如：语言要幽默风趣带点自黑，多讲干货，尽量不要用生僻的学术词汇，每段不超过三句话..." 
+                 value={style} 
+                 onChange={e => setStyle(e.target.value)} 
+                 style={{ width: '100%', resize: 'vertical', minHeight: '100px', fontFamily: 'inherit', fontSize: '0.85rem', padding: '0.75rem', borderRadius: '6px', border: '1px solid transparent', outline: 'none', background: 'var(--card-bg)', color: 'var(--text-main)', lineHeight: '1.6', boxSizing: 'border-box', transition: '0.2s', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)' }} 
+                 onFocus={e => e.target.style.border = '1px solid #f59e0b'}
+                 onBlur={e => e.target.style.border = '1px solid transparent'}
+               />
             </div>
           </div>
           
           <div style={{ marginTop: 'auto', paddingTop: '1.5rem' }}>
             
             {availableTools.length > 0 && (
-              <div style={{ marginBottom: '1.5rem', background: 'var(--code-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.75rem' }}>🧰 启用发散推演增强工具（支持实时搜网寻取灵感）</span>
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                  {availableTools.filter(t => t.is_active).map(tool => (
-                    <label key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={selectedToolsForGen.includes(tool.name)}
-                        onChange={(e) => {
-                          if(e.target.checked) setSelectedToolsForGen(p => [...p, tool.name]);
-                          else setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                   <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>🧰 外挂推演增强工具 (Agent Tools)</span>
+                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>勾选工具协助查阅最新资料发散灵感</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
+                  {availableTools.filter(t => t.is_active).map(tool => {
+                    const isSelected = selectedToolsForGen.includes(tool.name);
+                    return (
+                      <div 
+                        key={tool.id} 
+                        onClick={() => {
+                          if (isSelected) setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+                          else setSelectedToolsForGen(p => [...p, tool.name]);
                         }}
-                        style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
-                      />
-                      {tool.name === 'web_search' ? '🌐 网络搜索信息' : tool.name}
-                    </label>
-                  ))}
+                        style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column',
+                          gap: '0.35rem', 
+                          padding: '0.85rem', 
+                          borderRadius: '8px', 
+                          cursor: 'pointer',
+                          background: isSelected ? 'rgba(99,102,241,0.06)' : 'var(--code-bg)',
+                          border: isSelected ? '1px solid rgba(99,102,241,0.5)' : '1px solid var(--border-color)',
+                          boxShadow: isSelected ? '0 4px 12px rgba(99,102,241,0.1)' : 'none',
+                          transition: 'all 0.2s ease',
+                          position: 'relative'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isSelected ? 'var(--primary-color)' : 'var(--text-main)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                            {tool.name === 'web_search' ? '🌐 全网实时检索' : `🔌 ${tool.name}`}
+                          </span>
+                          <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: isSelected ? '4px solid var(--primary-color)' : '1px solid var(--border-color)', transition: '0.2s', flexShrink: 0 }} />
+                        </div>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{tool.category || 'MCP 外部节点'}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
+
+            <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.85rem 1rem', background: 'var(--code-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>💡 预生成大纲方案数</span>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>让模型同时推演多个不同视角的骨架供挑选</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                 <input type="range" min="1" max="5" value={generateCount} onChange={e => setGenerateCount(Number(e.target.value))} style={{ width: '100px', accentColor: 'var(--primary-color)' }} />
+                 <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--primary-color)', minWidth: '20px', textAlign: 'center' }}>{generateCount}</span>
+              </div>
+            </div>
 
             <button className="btn btn-primary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem' }} onClick={generateOutline} disabled={isGeneratingOutline}>
               {isGeneratingOutline ? '正在脑暴并多发分路推演大纲...' : '生成智能多角大纲 ✨'}
@@ -834,10 +995,15 @@ export default function Workspace() {
 
               {(Array.isArray(currentOutline.sections) ? currentOutline.sections : []).map((s, i) => (
                 <div key={i} style={{ 
-                  background: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '12px', 
-                  padding: '1.5rem', marginBottom: '1.5rem', position: 'relative', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' 
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '16px', 
+                  padding: '1.5rem 2rem', marginBottom: '1.5rem', position: 'relative', 
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.04)', transition: 'transform 0.3s ease, box-shadow 0.3s ease',
+                  borderTop: '4px solid var(--primary-color)', zIndex: 5
+                }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 40px rgba(0,0,0,0.08)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.04)'; }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary-color)', background: 'var(--card-bg)', border: '1px solid var(--primary-color)', padding: '0.2rem 0.8rem', borderRadius: '100px' }}>
                       段落 {i + 1}
                     </span>
@@ -850,13 +1016,15 @@ export default function Workspace() {
                     placeholder="请输入段落小标题"
                     value={s.title || ''} 
                     onChange={e => updateSection(i, 'title', e.target.value)} 
-                    style={{ fontSize: '1.1rem', fontWeight: 600, border: 'none', borderBottom: '1px dashed var(--border-color)', padding: '0.5rem 0', width: '100%', marginBottom: '1rem', background: 'transparent', color: 'var(--text-main)', outline: 'none' }}
+                    style={{ fontSize: '1.25rem', fontWeight: 700, border: 'none', borderBottom: '2px solid transparent', padding: '0.5rem 0', width: '100%', marginBottom: '1rem', background: 'transparent', color: 'var(--text-main)', outline: 'none', transition: 'border-color 0.2s' }}
+                    onFocus={e => e.target.style.borderBottom = '2px dashed var(--primary-color)'}
+                    onBlur={e => e.target.style.borderBottom = '2px solid transparent'}
                   />
                   <textarea 
                     placeholder="请详述该段落起承转合的核心逻辑与具体要讲解的内容..."
                     value={s.desc || ''} 
                     onChange={e => updateSection(i, 'desc', e.target.value)} 
-                    style={{ width: '100%', minHeight: '80px', border: 'none', background: 'transparent', resize: 'vertical', fontSize: '0.95rem', color: 'var(--text-muted)', lineHeight: '1.6', outline: 'none', marginBottom: '0.5rem' }}
+                    style={{ width: '100%', minHeight: '90px', border: 'none', background: 'var(--code-bg)', borderRadius: '8px', padding: '1rem', resize: 'vertical', fontSize: '0.95rem', color: 'var(--text-muted)', lineHeight: '1.7', outline: 'none', marginBottom: '1rem', border: '1px solid var(--border-color)' }}
                   />
                   
                   <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px dashed var(--border-color)', paddingTop: '0.75rem' }}>
@@ -891,23 +1059,34 @@ export default function Workspace() {
           
           <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
             {availableTools.length > 0 && (
-              <div style={{ marginBottom: '1rem' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.5rem' }}>⚙️ 结合工具生成终稿：</span>
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                  {availableTools.filter(t => t.is_active).map(tool => (
-                    <label key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text-muted)' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={selectedToolsForGen.includes(tool.name)}
-                        onChange={(e) => {
-                          if(e.target.checked) setSelectedToolsForGen(p => [...p, tool.name]);
-                          else setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+              <div style={{ marginBottom: '1.5rem' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.75rem' }}>🧰 结合外挂工具生成终稿：</span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
+                  {availableTools.filter(t => t.is_active).map(tool => {
+                    const isSelected = selectedToolsForGen.includes(tool.name);
+                    return (
+                      <div 
+                        key={tool.id} 
+                        onClick={() => {
+                          if (isSelected) setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+                          else setSelectedToolsForGen(p => [...p, tool.name]);
                         }}
-                        style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
-                      />
-                      {tool.name === 'web_search' ? '🌐 启用全网事实/文献级检索' : tool.name}
-                    </label>
-                  ))}
+                        style={{ 
+                          display: 'flex', flexDirection: 'column', gap: '0.35rem', padding: '0.85rem', borderRadius: '8px', cursor: 'pointer',
+                          background: isSelected ? 'rgba(99,102,241,0.06)' : 'var(--code-bg)',
+                          border: isSelected ? '1px solid rgba(99,102,241,0.5)' : '1px solid var(--border-color)',
+                          boxShadow: isSelected ? '0 4px 12px rgba(99,102,241,0.1)' : 'none', transition: 'all 0.2s ease', position: 'relative'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isSelected ? 'var(--primary-color)' : 'var(--text-main)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                            {tool.name === 'web_search' ? '🌐 开启最终资料检搜' : `🔌 ${tool.name}`}
+                          </span>
+                          <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: isSelected ? '4px solid var(--primary-color)' : '1px solid var(--border-color)', transition: '0.2s', flexShrink: 0 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -941,34 +1120,242 @@ export default function Workspace() {
       // Split content into paragraphs for per-para editing
       const paragraphs = currentContent.split(/\n\n+/);
 
+      // --- Export functions ---
+      const getExportHtml = () => {
+        const rendered = paragraphs.map(p => renderMarkdown(p)).join('');
+        const fontFamily = typographyConfig.fontFamily === 'inherit' ? '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif' : typographyConfig.fontFamily;
+        const preset = typographyConfig.preset;
+        
+        // Theme-aware accent colors
+        const themeMap = {
+          'typo-wechat-elegant':  { accent: '#10b981', bqBg: '#f0fdf4', h2Style: 'color:#10b981;text-align:center;border:none;', strongColor: '#10b981' },
+          'typo-wechat-vibrant':  { accent: '#f97316', bqBg: '#fff7ed', h2Style: 'color:#fff;background:linear-gradient(135deg,#f97316,#fb923c);padding:0.5em 1em;border-radius:100px;display:inline-block;', strongColor: '#ea580c' },
+          'typo-wechat-tech':     { accent: '#2563eb', bqBg: '#f0f9ff', h2Style: 'color:#2563eb;border-left:4px solid #2563eb;padding-left:12px;background:#eff6ff;border-radius:0 6px 6px 0;padding:0.5em 1em 0.5em 12px;', strongColor: '#1d4ed8' },
+          'typo-wechat-literary': { accent: '#ec4899', bqBg: '#fdf2f8', h2Style: 'color:#be185d;text-align:center;font-style:italic;font-weight:400;letter-spacing:3px;', strongColor: '#be185d' },
+          'typo-wechat-dark':     { accent: '#22d3ee', bqBg: '#1e293b', h2Style: 'color:#22d3ee;border-bottom:2px solid #22d3ee;padding-bottom:0.4em;', strongColor: '#34d399', bodyBg: '#0f172a', bodyColor: '#e2e8f0' },
+          'typo-zhihu':           { accent: '#056de8', bqBg: '#f6f6f6', h2Style: 'font-weight:600;border-bottom:1px solid #ebebeb;padding-bottom:0.3em;', strongColor: '#121212' },
+        };
+        const t = themeMap[preset] || (() => {
+          // Check custom themes
+          const ct = getCustomThemeById(preset);
+          if (ct) {
+            const h2Map = {
+              'left-border': `color:${ct.accentColor};border-left:4px solid ${ct.accentColor};padding-left:10px;`,
+              'center': `color:${ct.accentColor};text-align:center;border:none;`,
+              'center-lines': `color:${ct.accentColor};text-align:center;border:none;`,
+              'pill': `color:#fff;background:${ct.accentColor};padding:0.5em 1em;border-radius:100px;display:inline-block;`,
+            };
+            return { accent: ct.accentColor, bqBg: ct.blockquoteBg, h2Style: h2Map[ct.headingStyle] || '', strongColor: ct.strongColor, bodyBg: ct.bgColor, bodyColor: ct.bodyColor };
+          }
+          return { accent: '#6366f1', bqBg: '#f6f8fb', h2Style: '', strongColor: '#333' };
+        })();
+        const isDark = (preset === 'typo-wechat-dark') || (t.bodyBg && parseInt((t.bodyBg || '#fff').replace('#',''), 16) < 0x666666);
+        
+        return `
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${currentEntry.name || '成品文章'}</title>
+<style>
+  body { font-family: ${preset === 'typo-wechat-literary' ? 'Georgia,"Songti SC","SimSun",serif' : fontFamily}; font-size: ${typographyConfig.fontSize}; line-height: 1.8; text-align: ${typographyConfig.align}; color: ${isDark ? '#e2e8f0' : '#333'}; background: ${isDark ? '#0f172a' : '#fff'}; max-width: 720px; margin: 2rem auto; padding: 0 1.5rem; }
+  h1 { font-size: 1.6em; margin: 1.5em 0 0.6em; }
+  h2 { font-size: 1.3em; margin: 1.4em 0 0.5em; ${t.h2Style} }
+  h3 { font-size: 1.1em; margin: 1.2em 0 0.4em; }
+  p { margin-bottom: 1.2em; }
+  strong { font-weight: 700; color: ${t.strongColor}; }
+  em { font-style: italic; }
+  blockquote { border-left: 4px solid ${t.accent}; padding: 0.8em 1em; margin: 1em 0; background: ${t.bqBg}; color: ${isDark ? '#94a3b8' : '#666'}; border-radius: 4px; }
+  hr { border: none; border-top: 1px solid ${isDark ? '#334155' : '#ddd'}; margin: 1.5rem 0; }
+  code { background: ${isDark ? '#1e293b' : 'rgba(0,0,0,0.06)'}; padding: 0.1em 0.4em; border-radius: 3px; font-family: monospace; ${isDark ? 'color:#22d3ee;' : ''} }
+  @media print { body { max-width: 100%; margin: 0; background: #fff; color: #333; } }
+</style>
+</head><body>${rendered}</body></html>`;
+      };
+
+      const exportToWord = () => {
+        const html = getExportHtml();
+        const blob = new Blob(['\ufeff' + html], { type: 'application/msword' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (currentEntry.name || '成品文章') + '.doc';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+
+      const exportToPDF = () => {
+        const html = getExportHtml();
+        const win = window.open('', '_blank');
+        win.document.write(html);
+        win.document.close();
+        setTimeout(() => { win.print(); }, 400);
+      };
+
       return (
         <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: 0 }}>
-          <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-            <span>最后成品</span>
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          
+          {/* Header row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>✨</span> 最后成品
+              {isStreaming && <span style={{ fontSize: '0.8rem', color: 'var(--primary-color)', fontWeight: 400, animation: 'pulse 1.5s ease-in-out infinite' }}>● 生成中...</span>}
+            </h3>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               {currentContent && (
-                <div style={{ display: 'flex', background: 'var(--code-bg)', borderRadius: '8px', padding: '3px', border: '1px solid var(--border-color)' }}>
-                  <button onClick={() => setContentView('rendered')} style={{ padding: '0.3rem 0.8rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, background: contentView === 'rendered' ? 'var(--primary-color)' : 'transparent', color: contentView === 'rendered' ? 'white' : 'var(--text-muted)', transition: 'all 0.2s' }}>📄 渲染视图</button>
-                  <button onClick={() => setContentView('raw')} style={{ padding: '0.3rem 0.8rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, background: contentView === 'raw' ? 'var(--primary-color)' : 'transparent', color: contentView === 'raw' ? 'white' : 'var(--text-muted)', transition: 'all 0.2s' }}>📝 Markdown 原文</button>
+                <div style={{ display: 'flex', background: 'var(--code-bg)', borderRadius: '8px', padding: '2px', border: '1px solid var(--border-color)' }}>
+                  <button onClick={() => setContentView('rendered')} style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, background: contentView === 'rendered' ? 'var(--primary-color)' : 'transparent', color: contentView === 'rendered' ? 'white' : 'var(--text-muted)', transition: 'all 0.2s' }}>📄 渲染</button>
+                  <button onClick={() => setContentView('raw')} style={{ padding: '0.3rem 0.75rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, background: contentView === 'raw' ? 'var(--primary-color)' : 'transparent', color: contentView === 'raw' ? 'white' : 'var(--text-muted)', transition: 'all 0.2s' }}>📝 源码</button>
                 </div>
               )}
               {!isStreaming && currentContent && (
-                <button onClick={saveCurrentAsTemplate} className="btn" style={{ fontSize: '0.8rem', padding: '0.25rem 0.75rem', background: '#10b981', color: 'white', border: 'none' }}>
-                  💾 存储套路
-                </button>
+                <>
+                  <button onClick={saveCurrentAsTemplate} className="btn" style={{ fontSize: '0.78rem', padding: '0.3rem 0.75rem', background: '#10b981', color: 'white', border: 'none' }}>
+                    💾 存储套路
+                  </button>
+                  <div style={{ display: 'flex', background: 'var(--code-bg)', borderRadius: '8px', padding: '2px', border: '1px solid var(--border-color)' }}>
+                    <button onClick={exportToWord} style={{ padding: '0.3rem 0.65rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, background: 'transparent', color: 'var(--text-muted)', transition: 'all 0.2s' }} title="导出为 Word 文档">
+                      📥 Word
+                    </button>
+                    <button onClick={exportToPDF} style={{ padding: '0.3rem 0.65rem', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, background: 'transparent', color: 'var(--text-muted)', transition: 'all 0.2s' }} title="导出为 PDF (打印)">
+                      📄 PDF
+                    </button>
+                  </div>
+                </>
               )}
-              {isStreaming && <span style={{ fontSize: '0.9rem', color: 'var(--primary-color)', fontWeight: 'normal' }}>正在生成中...</span>}
             </div>
-          </h3>
+          </div>
 
           {contentView === 'rendered' ? (
-            <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.25rem' }}>
-              {currentContent ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
+              
+              {/* Word-style Ribbon Toolbar */}
+              <div className="word-ribbon" style={{
+                display: 'flex', alignItems: 'center', flexWrap: 'wrap',
+                padding: '4px 8px', gap: '2px',
+                background: 'linear-gradient(180deg, var(--card-bg) 0%, var(--code-bg) 100%)',
+                borderBottom: '1px solid var(--border-color)',
+              }}>
+
+                {/* Font Family Dropdown */}
+                <select
+                  value={typographyConfig.fontFamily}
+                  onChange={e => updateTypoConfig('fontFamily', e.target.value)}
+                  title="字体"
+                  style={{ width: '120px', height: '26px', fontSize: '12px', padding: '0 4px', border: '1px solid var(--border-color)', borderRadius: '2px', background: 'var(--bg-color)', color: 'var(--text-main)', outline: 'none', cursor: 'pointer' }}
+                >
+                  <option value="inherit">默认字体</option>
+                  <option value="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">微软雅黑</option>
+                  <option value="Georgia, 'Times New Roman', Times, serif">宋体/衬线</option>
+                  <option value="'Courier New', Courier, monospace">等宽字体</option>
+                </select>
+
+                {/* Font Size Dropdown */}
+                <select
+                  value={typographyConfig.fontSize}
+                  onChange={e => updateTypoConfig('fontSize', e.target.value)}
+                  title="字号"
+                  style={{ width: '52px', height: '26px', fontSize: '12px', padding: '0 2px', border: '1px solid var(--border-color)', borderRadius: '2px', background: 'var(--bg-color)', color: 'var(--text-main)', outline: 'none', cursor: 'pointer', marginRight: '4px' }}
+                >
+                  <option value="0.8rem">10</option>
+                  <option value="0.85rem">11</option>
+                  <option value="0.9rem">12</option>
+                  <option value="1rem">14</option>
+                  <option value="1.1rem">16</option>
+                  <option value="1.15rem">18</option>
+                  <option value="1.3rem">22</option>
+                </select>
+
+                {/* Separator */}
+                <div style={{ width: '1px', height: '20px', background: 'var(--border-color)', margin: '0 4px' }} />
+
+                {/* Alignment Group */}
+                {[
+                  { key: 'left',    svg: 'M3 4h18v2H3zm0 4h12v2H3zm0 4h18v2H3zm0 4h12v2H3z', label: '左对齐' },
+                  { key: 'center',  svg: 'M3 4h18v2H3zm3 4h12v2H6zM3 12h18v2H3zm3 4h12v2H6z', label: '居中' },
+                  { key: 'justify', svg: 'M3 4h18v2H3zm0 4h18v2H3zm0 4h18v2H3zm0 4h18v2H3z', label: '两端对齐' },
+                ].map(a => (
+                  <button
+                    key={a.key}
+                    onClick={() => updateTypoConfig('align', a.key)}
+                    title={a.label}
+                    style={{
+                      width: '28px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: typographyConfig.align === a.key ? '1px solid var(--primary-color)' : '1px solid transparent',
+                      borderRadius: '2px', cursor: 'pointer',
+                      background: typographyConfig.align === a.key ? 'rgba(99,102,241,0.1)' : 'transparent',
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill={typographyConfig.align === a.key ? 'var(--primary-color)' : 'var(--text-muted)'}><path d={a.svg}/></svg>
+                  </button>
+                ))}
+
+                {/* Separator */}
+                <div style={{ width: '1px', height: '20px', background: 'var(--border-color)', margin: '0 4px' }} />
+
+                {/* Preset Theme Dropdown */}
+                <select
+                  value={typographyConfig.preset}
+                  onChange={e => {
+                    const val = e.target.value;
+                    if (val === '__new__') {
+                      setEditingTheme({ ...defaultNewTheme });
+                      setThemeEditorOpen(true);
+                    } else {
+                      updateTypoConfig('preset', val);
+                    }
+                  }}
+                  title="排版主题"
+                  style={{ height: '26px', fontSize: '12px', padding: '0 4px', border: '1px solid var(--border-color)', borderRadius: '2px', background: 'var(--bg-color)', color: 'var(--text-main)', outline: 'none', cursor: 'pointer' }}
+                >
+                  <optgroup label="预设主题">
+                    <option value="typo-default">📐 系统默认</option>
+                    <option value="typo-wechat-elegant">💚 微信公众号</option>
+                    <option value="typo-zhihu">🔵 知乎专栏</option>
+                  </optgroup>
+                  {customThemes.length > 0 && (
+                    <optgroup label="我的自定义">
+                      {customThemes.map(ct => (
+                        <option key={ct.id} value={ct.id}>🎨 {ct.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="───────────">
+                    <option value="__new__">＋ 新建自定义主题...</option>
+                  </optgroup>
+                </select>
+
+                {/* Edit current custom theme button */}
+                {isCustomPreset && (
+                  <button
+                    onClick={() => { setEditingTheme({ ...getCustomThemeById(typographyConfig.preset) }); setThemeEditorOpen(true); }}
+                    title="编辑当前自定义主题"
+                    style={{ width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border-color)', borderRadius: '2px', background: 'transparent', cursor: 'pointer', fontSize: '12px' }}
+                  >✏️</button>
+                )}
+
+              </div>
+
+              {/* Content area */}
+              {(() => {
+                const customT = isCustomPreset ? getCustomThemeById(typographyConfig.preset) : null;
+                const customInlineStyle = customT ? {
+                  color: customT.bodyColor,
+                  background: customT.bgColor,
+                  letterSpacing: customT.letterSpacing,
+                  lineHeight: customT.lineHeight,
+                  borderRadius: '8px',
+                } : {};
+                return (
+                  <div 
+                    style={{ flex: 1, overflowY: 'auto', padding: '2rem 1.5rem', textAlign: typographyConfig.align, fontFamily: typographyConfig.fontFamily, fontSize: typographyConfig.fontSize, lineHeight: 1.8, ...customInlineStyle }} 
+                    className={isCustomPreset ? '' : `${typographyConfig.preset} ${typographyConfig.preset.startsWith('typo-wechat-') ? 'typo-wechat-base' : ''}`}
+                  >
+                {currentContent ? (
                 paragraphs.map((para, pIdx) => (
                   <div key={pIdx} style={{ marginBottom: '1.25rem', borderRadius: '8px', border: editingParagraph?.paraIdx === pIdx ? '2px solid var(--primary-color)' : '2px solid transparent', transition: 'border 0.2s' }}>
                     {/* Paragraph content */}
                     <div
-                      style={{ padding: '0.75rem 1rem', lineHeight: '1.9', background: editingParagraph?.paraIdx === pIdx ? 'var(--code-bg)' : 'transparent', borderRadius: '8px 8px 0 0' }}
+                      style={{ padding: '0.75rem 1rem', background: editingParagraph?.paraIdx === pIdx ? 'var(--code-bg)' : 'transparent', borderRadius: '8px 8px 0 0' }}
                       dangerouslySetInnerHTML={{ __html: renderMarkdown(para) }}
                     />
                     {/* Edit toolbar */}
@@ -1006,10 +1393,14 @@ export default function Workspace() {
                   </div>
                 ))
               ) : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>AI 终稿将在这里渲染展示。</span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '1rem' }}>
+                  <div style={{ fontSize: '3rem', opacity: 0.5 }}>📝</div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '1.1rem', fontWeight: 500 }}>AI 终稿将在这里以最佳排版渲染呈现。</span>
                 </div>
               )}
+              </div>
+                );
+              })()}
             </div>
           ) : (
             <textarea
@@ -1025,6 +1416,10 @@ export default function Workspace() {
 
     if (activePane === 'tools') {
       return renderToolsPane();
+    }
+
+    if (activePane === 'logs') {
+      return renderLogsPane();
     }
   };
 
@@ -1067,6 +1462,41 @@ export default function Workspace() {
     } catch(e) {
       alert((editingToolId ? "更新" : "添加") + "失败：" + (e.response?.data?.error || e.message));
     }
+  };
+
+  const renderLogsPane = () => {
+    return (
+      <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: 0, overflowY: 'auto' }}>
+        <h3 style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span>📈</span> 本项目历史操作纪要
+        </h3>
+        {projectLogs.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', textAlign: 'center', margin: 'auto', opacity: 0.7 }}>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📭</div>
+            当前项目还没有留下操作痕迹。
+          </div>
+        ) : (
+          <div style={{ position: 'relative', borderLeft: '2px solid var(--border-color)', marginLeft: '1rem', paddingLeft: '1.5rem' }}>
+            {projectLogs.map((log, idx) => (
+              <div key={log.id} style={{ position: 'relative', marginBottom: idx === projectLogs.length - 1 ? 0 : '2rem' }}>
+                {/* Timeline Dot */}
+                <div style={{ position: 'absolute', top: 0, left: '-1.85rem', width: '12px', height: '12px', borderRadius: '50%', backgroundColor: 'var(--primary-color)', border: '2px solid var(--bg-color)', zIndex: 2 }} />
+                
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem', marginBottom: '0.4rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-main)' }}>{log.action}</h4>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(log.created_at).toLocaleString()}</span>
+                </div>
+                {log.details && (
+                  <div style={{ backgroundColor: 'var(--code-bg)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.5', wordBreak: 'break-all' }}>
+                    {log.details}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderToolsPane = () => {
@@ -1181,7 +1611,12 @@ export default function Workspace() {
   };
 
   return (
-    <div className="layout-wrapper">
+    <div className="layout-wrapper" style={{ position: 'relative', overflow: 'hidden' }}>
+      
+      {/* 沉浸式环境背景光效 */}
+      <div style={{ position: 'fixed', top: '-15%', left: '-10%', width: '40vw', height: '40vw', background: 'var(--primary-color)', filter: 'blur(120px)', opacity: 0.05, zIndex: 0, borderRadius: '50%', pointerEvents: 'none' }} />
+      <div style={{ position: 'fixed', bottom: '-15%', right: '-10%', width: '40vw', height: '40vw', background: '#10b981', filter: 'blur(120px)', opacity: 0.05, zIndex: 0, borderRadius: '50%', pointerEvents: 'none' }} />
+
       <nav className="navbar">
         <h2 style={{ color: 'var(--primary-color)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           ✨ 智慧文案平台
@@ -1200,12 +1635,12 @@ export default function Workspace() {
         </div>
       </nav>
 
-      <div className="workspace-layout">
+      <div className="workspace-layout" style={{ position: 'relative', zIndex: 10 }}>
         
         {/* Left Panel: Navigation Drawer */}
-        <div className="sidebar">
+        <div className="sidebar" style={{ background: 'var(--nav-bg)', backdropFilter: 'blur(10px)', padding: '1rem', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: '0 8px 30px rgba(0,0,0,0.02)' }}>
           
-          <h4 style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '2px', marginBottom: '1.5rem', paddingLeft: '0.5rem' }}>
+          <h4 style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '2px', marginBottom: '1.5rem', paddingLeft: '0.5rem', marginTop: '0.5rem' }}>
              Workflow Pipeline
           </h4>
           
@@ -1229,6 +1664,13 @@ export default function Workspace() {
             onClick={() => setActivePane('tools')}
           >
             <span>🧰</span> 工具中心
+          </div>
+
+          <div 
+            style={getMenuItemStyle('logs')}
+            onClick={() => setActivePane('logs')}
+          >
+            <span>📈</span> 项目日志
           </div>
 
           <div 
@@ -1357,6 +1799,141 @@ export default function Workspace() {
       </div>
       
       {showConfig && <ConfigModal onClose={() => setShowConfig(false)} />}
+
+      {/* Custom Theme Editor Modal */}
+      {themeEditorOpen && (() => {
+        const t = editingTheme || { ...defaultNewTheme };
+        const set = (k, v) => setEditingTheme(prev => ({ ...(prev || defaultNewTheme), [k]: v }));
+        const headingStyleLabel = { 'left-border': '左边条', 'center': '居中', 'center-lines': '居中+左右横线', 'pill': '胶囊标签' };
+        const isDark = t.bgColor && parseInt(t.bgColor.replace('#',''), 16) < 0x666666;
+        
+        // Generate live preview heading style
+        const previewH2Style = (() => {
+          switch(t.headingStyle) {
+            case 'center': return { color: t.accentColor, textAlign: 'center', border: 'none' };
+            case 'center-lines': return { color: t.accentColor, textAlign: 'center', border: 'none' };
+            case 'pill': return { color: '#fff', background: t.accentColor, padding: '0.4em 1em', borderRadius: '100px', display: 'inline-block', textAlign: 'center', fontSize: '0.95em' };
+            default: return { color: t.accentColor, borderLeft: `4px solid ${t.accentColor}`, paddingLeft: '10px' };
+          }
+        })();
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }} onClick={() => { setThemeEditorOpen(false); setEditingTheme(null); }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card-bg)', borderRadius: '12px', border: '1px solid var(--border-color)', width: '680px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+              
+              {/* Modal Header */}
+              <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0 }}>🎨 自定义排版主题</h3>
+                <button onClick={() => { setThemeEditorOpen(false); setEditingTheme(null); }} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-muted)' }}>✕</button>
+              </div>
+
+              <div style={{ padding: '1.5rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                
+                {/* Left: Controls */}
+                <div style={{ flex: '1 1 280px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {/* Theme Name */}
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>主题名称</label>
+                    <input value={t.name} onChange={e => set('name', e.target.value)} style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-color)', color: 'var(--text-main)', outline: 'none', fontSize: '0.9rem' }} />
+                  </div>
+
+                  {/* Color Row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    {[
+                      { key: 'accentColor', label: '主题强调色' },
+                      { key: 'strongColor', label: '加粗文字色' },
+                      { key: 'bodyColor', label: '正文颜色' },
+                      { key: 'bgColor', label: '背景色' },
+                      { key: 'blockquoteBg', label: '引用块底色' },
+                    ].map(c => (
+                      <div key={c.key}>
+                        <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }}>{c.label}</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <input type="color" value={t[c.key]} onChange={e => set(c.key, e.target.value)} style={{ width: '32px', height: '28px', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', padding: 0 }} />
+                          <input value={t[c.key]} onChange={e => set(c.key, e.target.value)} style={{ flex: 1, padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-color)', color: 'var(--text-main)', fontSize: '0.78rem', fontFamily: 'monospace', outline: 'none' }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Heading Style */}
+                  <div>
+                    <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>标题装饰风格</label>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {Object.entries(headingStyleLabel).map(([k, v]) => (
+                        <button key={k} onClick={() => set('headingStyle', k)} style={{
+                          padding: '0.35rem 0.75rem', fontSize: '0.78rem', borderRadius: '6px', cursor: 'pointer',
+                          border: t.headingStyle === k ? `2px solid ${t.accentColor}` : '1px solid var(--border-color)',
+                          background: t.headingStyle === k ? (t.accentColor + '18') : 'var(--bg-color)',
+                          color: t.headingStyle === k ? t.accentColor : 'var(--text-muted)', fontWeight: 600,
+                        }}>{v}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Spacing */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }}>字间距</label>
+                      <select value={t.letterSpacing} onChange={e => set('letterSpacing', e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-color)', color: 'var(--text-main)', fontSize: '0.8rem', outline: 'none' }}>
+                        <option value="0px">无 (0px)</option>
+                        <option value="0.5px">紧凑 (0.5px)</option>
+                        <option value="1px">标准 (1px)</option>
+                        <option value="2px">宽松 (2px)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '3px' }}>行高</label>
+                      <select value={t.lineHeight} onChange={e => set('lineHeight', e.target.value)} style={{ width: '100%', padding: '0.4rem', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-color)', color: 'var(--text-main)', fontSize: '0.8rem', outline: 'none' }}>
+                        <option value="1.5">紧凑 (1.5)</option>
+                        <option value="1.8">标准 (1.8)</option>
+                        <option value="2.0">舒适 (2.0)</option>
+                        <option value="2.2">宽松 (2.2)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Live Preview */}
+                <div style={{ flex: '1 1 280px' }}>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>实时预览</label>
+                  <div style={{
+                    background: t.bgColor, color: t.bodyColor, padding: '1.25rem', borderRadius: '8px',
+                    border: '1px solid var(--border-color)', letterSpacing: t.letterSpacing, lineHeight: t.lineHeight,
+                    fontSize: '0.85rem', minHeight: '200px',
+                  }}>
+                    <h2 style={{ ...previewH2Style, fontSize: '1.1rem', margin: '0 0 0.8em' }}>
+                      {t.headingStyle === 'center-lines' && <span style={{ display: 'inline-block', width: '24px', height: '1px', background: t.accentColor, verticalAlign: 'middle', marginRight: '8px' }} />}
+                      这是标题样式
+                      {t.headingStyle === 'center-lines' && <span style={{ display: 'inline-block', width: '24px', height: '1px', background: t.accentColor, verticalAlign: 'middle', marginLeft: '8px' }} />}
+                    </h2>
+                    <p style={{ marginBottom: '0.8em', textAlign: 'center' }}>这是正文段落内容，用于预览整体排版效果。<strong style={{ color: t.strongColor }}>加粗文字</strong>。</p>
+                    <div style={{ background: t.blockquoteBg, borderLeft: `3px solid ${t.accentColor}`, padding: '0.6em 0.8em', borderRadius: '4px', color: isDark ? '#94a3b8' : '#666', fontSize: '0.85em', marginBottom: '0.8em' }}>
+                      引用文字效果预览
+                    </div>
+                    <p style={{ marginBottom: 0, textAlign: 'center', fontSize: '0.8em', opacity: 0.6 }}>— 尾部效果 —</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  {t.id && (
+                    <button onClick={() => { deleteCustomTheme(t.id); setThemeEditorOpen(false); setEditingTheme(null); }} style={{ padding: '0.5rem 1rem', background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                      🗑 删除此主题
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button onClick={() => { setThemeEditorOpen(false); setEditingTheme(null); }} style={{ padding: '0.5rem 1rem', background: 'var(--code-bg)', color: 'var(--text-main)', border: '1px solid var(--border-color)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}>取消</button>
+                  <button onClick={() => saveCustomTheme(t)} style={{ padding: '0.5rem 1.5rem', background: 'var(--primary-color)', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>💾 保存主题</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
