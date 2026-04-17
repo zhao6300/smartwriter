@@ -39,6 +39,19 @@ export default function Workspace() {
   const [savedTemplates, setSavedTemplates] = useState([]);
   const [viewingTemplate, setViewingTemplate] = useState(null); // for detail view
   const [editingTemplateOutline, setEditingTemplateOutline] = useState(null); // editable outline in template detail
+  
+  // Extract Template States
+  const [isExtractingTemplate, setIsExtractingTemplate] = useState(false);
+  const [extractUrl, setExtractUrl] = useState('');
+  const [showExtractPane, setShowExtractPane] = useState(false);
+  const [selectedTemplates, setSelectedTemplates] = useState([]); // for bulk deletion
+  
+  // Tools states
+  const [availableTools, setAvailableTools] = useState([]);
+  const [selectedToolsForGen, setSelectedToolsForGen] = useState([]); // Array of tool names enabled 
+  const [mcpForm, setMcpForm] = useState({ name: '', category: '内容库', config: '' });
+  const [isAddingMcp, setIsAddingMcp] = useState(false);
+  const [editingToolId, setEditingToolId] = useState(null);
 
   useEffect(() => {
     if (!projectId) return;
@@ -86,6 +99,14 @@ export default function Workspace() {
       const tempsRes = await axios.get('/template');
       setSavedTemplates(tempsRes.data);
 
+      try {
+        const toolsRes = await axios.get('/tools');
+        setAvailableTools(toolsRes.data);
+        setSelectedToolsForGen(toolsRes.data.filter(t => t.is_active).map(t => t.name));
+      } catch (e) {
+        console.error("加载工具列表异常", e);
+      }
+
     } catch(e) {
       console.error("加载资源异常", e);
     }
@@ -96,7 +117,7 @@ export default function Workspace() {
     setIsGeneratingOutline(true);
     setOutlines([]);
     try {
-      const { data } = await axios.post('/workflow/outline', { articleId: projectId, topic, audience, customStyle: style });
+      const { data } = await axios.post('/workflow/outline', { articleId: projectId, topic, audience, customStyle: style, selectedTools: selectedToolsForGen });
       const parsedOutlines = data.outline.outlines || data.outline;
       if (Array.isArray(parsedOutlines) && parsedOutlines.length > 0) {
         setOutlines(parsedOutlines);
@@ -119,6 +140,7 @@ export default function Workspace() {
       // Pass existing variants so AI generates a non-repetitive new one
       const { data } = await axios.post('/workflow/outline', {
         articleId: projectId, topic, audience, customStyle: style,
+        selectedTools: selectedToolsForGen,
         existingVariants: outlines.map(o => ({ variantName: o.variantName, core_idea: o.core_idea })),
         generateCount: 1
       });
@@ -162,6 +184,7 @@ export default function Workspace() {
         .map(o => ({ variantName: o.variantName, core_idea: o.core_idea }));
       const { data } = await axios.post('/workflow/outline', {
         articleId: projectId, topic, audience, customStyle: style,
+        selectedTools: selectedToolsForGen,
         existingVariants: otherVariants,
         generateCount: 1
       });
@@ -207,7 +230,7 @@ export default function Workspace() {
       const tempsRes = await axios.get('/template');
       setSavedTemplates(tempsRes.data);
     } catch(e) {
-      alert("存档失败！");
+      alert("存档失败：" + (e.response?.data?.error || e.message));
     }
   };
 
@@ -217,9 +240,50 @@ export default function Workspace() {
       await axios.delete(`/template/${templateId}`);
       setSavedTemplates(prev => prev.filter(t => t.id !== templateId));
       if (viewingTemplate?.id === templateId) setViewingTemplate(null);
+      setSelectedTemplates(prev => prev.filter(id => id !== templateId));
     } catch (e) {
       alert('删除失败');
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedTemplates.length === 0) return;
+    if (!window.confirm(`确定要删除选中的 ${selectedTemplates.length} 个模板吗？此操作不可撤销。`)) return;
+    try {
+      await axios.post('/template/bulk-delete', { ids: selectedTemplates });
+      setSavedTemplates(prev => prev.filter(t => !selectedTemplates.includes(t.id)));
+      setSelectedTemplates([]);
+    } catch(e) {
+      alert("批量删除失败：" + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const handleExtractTemplate = async (mode, content) => {
+    if (!content) return alert("内容不能为空！");
+    setIsExtractingTemplate(true);
+    try {
+      const res = await axios.post('/template/extract', { sourceType: mode, content });
+      alert("✅ 智能提取成功！");
+      setSavedTemplates(prev => [res.data, ...prev]);
+      setShowExtractPane(false);
+      setExtractUrl('');
+      setViewingTemplate(res.data);
+    } catch(e) {
+      alert("提炼失败：" + (e.response?.data?.error || e.message));
+    } finally {
+      setIsExtractingTemplate(false);
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      handleExtractTemplate('text', evt.target.result);
+      e.target.value = ''; // clear input
+    };
+    reader.readAsText(file);
   };
 
   const generateContent = async (selectedOutlineIndex) => {
@@ -244,7 +308,7 @@ export default function Workspace() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${useAuthStore.getState().token}`
         },
-        body: JSON.stringify({ articleId, final_outline: outlineToUse, contentName: outlineName })
+        body: JSON.stringify({ articleId, final_outline: outlineToUse, contentName: outlineName, selectedTools: selectedToolsForGen })
       });
 
       const reader = res.body.getReader();
@@ -342,10 +406,62 @@ export default function Workspace() {
       return (
         <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: 0, overflowY: 'auto' }}>
           <h3 style={{ marginBottom: '1rem' }}>📚 套路模板库</h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-            每个模板都由 AI 自动提炼抽象写作模式，可应用到任何新主题上。
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>每个模板都由 AI 自动提炼抽象写作模式，可应用到任何新主题上。</span>
+            {!viewingTemplate && !showExtractPane && (
+              <button 
+                onClick={() => setShowExtractPane(true)} 
+                className="btn btn-primary" 
+                style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', borderRadius: '100px' }}
+              >
+                🆕 智能提取新套路
+              </button>
+            )}
           </p>
-          {savedTemplates.length === 0 ? (
+
+          {showExtractPane ? (
+            <div style={{ background: 'var(--code-bg)', padding: '1.5rem', borderRadius: '12px', marginBottom: '1rem', border: '1px solid var(--primary-color)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <h4 style={{ margin: 0, color: 'var(--primary-color)' }}>🤖 从文章/链接智能提取</h4>
+                <button onClick={() => setShowExtractPane(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕ 取消</button>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>提供一篇爆款文章或者一段优质文案，AI会通读全文，逆向提炼并生成配套的框架结构模板。</p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input 
+                    placeholder="输入文章网址链接 (例如: https://xxx)" 
+                    value={extractUrl}
+                    onChange={e => setExtractUrl(e.target.value)}
+                    style={{ flex: 1, padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-main)', outline: 'none' }}
+                  />
+                  <button 
+                    disabled={isExtractingTemplate || !extractUrl}
+                    onClick={() => handleExtractTemplate('url', extractUrl)}
+                    className="btn btn-primary"
+                    style={{ padding: '0 1.5rem' }}
+                  >
+                    {isExtractingTemplate ? '解析中...' : '提取链接'}
+                  </button>
+                </div>
+                
+                <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>—— 或者 ——</div>
+                
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <label className="btn" style={{ cursor: isExtractingTemplate ? 'not-allowed' : 'pointer', background: 'var(--card-bg)', border: '1px dashed var(--primary-color)', color: 'var(--primary-color)', padding: '0.8rem 2rem', borderRadius: '8px', opacity: isExtractingTemplate ? 0.6 : 1 }}>
+                    {isExtractingTemplate ? '解析中...' : '📄 上传纯文本/Markdown文档 (txt, md)'}
+                    <input 
+                      type="file" 
+                      accept=".txt,.md" 
+                      style={{ display: 'none' }} 
+                      onChange={handleFileUpload} 
+                      disabled={isExtractingTemplate}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          ) : savedTemplates.length === 0 && !viewingTemplate ? (
             <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📦</div>
               <p>还没有保存任何套路。</p>
@@ -397,14 +513,38 @@ export default function Workspace() {
               setEditingTemplateOutline(null);
             };
 
+            const handleUpdateTemplate = async () => {
+              try {
+                const frameworkToSave = {
+                  core_idea: eto.core_idea,
+                  logic_organization: eto.logic_organization,
+                  sections: eto.sections
+                };
+                const res = await axios.put(`/template/${viewingTemplate.id}`, {
+                  name: eto.variantName, // saving the edited name
+                  framework: frameworkToSave
+                });
+                alert('💾 修改已成功保存至模板库！');
+                setSavedTemplates(prev => prev.map(t => t.id === viewingTemplate.id ? res.data : t));
+                setViewingTemplate(res.data);
+              } catch(e) {
+                alert('修改保存失败：' + (e.response?.data?.error || e.message));
+              }
+            };
+
             return (
               <div style={{ flex: 1, overflowY: 'auto' }}>
                 <button onClick={() => { setViewingTemplate(null); setEditingTemplateOutline(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color)', fontWeight: 600, fontSize: '0.9rem', marginBottom: '1rem', padding: 0 }}>← 返回列表</button>
                 
                 {/* AI Abstract Summary */}
-                <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', marginBottom: '1.5rem' }}>
-                  <h4 style={{ margin: '0 0 0.5rem', color: 'var(--primary-color)' }}>{viewingTemplate.name}</h4>
-                  {abs.writing_strategy && <p style={{ fontSize: '0.85rem', margin: '0.4rem 0', lineHeight: 1.6, color: 'var(--text-muted)' }}>🎯 {abs.writing_strategy}</p>}
+                <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', marginBottom: '1.5rem', border: '1px solid var(--border-color)' }}>
+                  <input
+                    value={eto.variantName}
+                    onChange={e => updateEto('variantName', e.target.value)}
+                    style={{ fontSize: '1.1rem', fontWeight: 700, margin: '0 0 0.5rem', color: 'var(--primary-color)', background: 'transparent', border: 'none', borderBottom: '1px dashed var(--primary-color)', width: '100%', outline: 'none', padding: '0.2rem 0' }}
+                    placeholder="请输入套路名称..."
+                  />
+                  {abs.writing_strategy && <p style={{ fontSize: '0.85rem', margin: '0.6rem 0 0.4rem', lineHeight: 1.6, color: 'var(--text-muted)' }}>🎯 {abs.writing_strategy}</p>}
                   {abs.emotional_arc && <p style={{ fontSize: '0.85rem', margin: '0.4rem 0', lineHeight: 1.6, color: 'var(--text-muted)' }}>🌊 {abs.emotional_arc}</p>}
                   <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                     {(abs.key_techniques || []).map((t, i) => <span key={i} style={{ padding: '0.15rem 0.5rem', borderRadius: '100px', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', fontSize: '0.7rem', color: 'var(--primary-color)' }}>{t}</span>)}
@@ -412,7 +552,7 @@ export default function Workspace() {
                 </div>
 
                 {/* Editable Outline Content */}
-                <h4 style={{ marginBottom: '0.75rem' }}>✏️ 大纲内容（可修改后应用）</h4>
+                <h4 style={{ marginBottom: '0.75rem' }}>✏️ 大纲内容（可修改后应用 或 保存）</h4>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
                   <div style={{ background: 'var(--code-bg)', padding: '0.75rem 1rem', borderRadius: '8px', borderLeft: '4px solid #10b981' }}>
@@ -454,27 +594,63 @@ export default function Workspace() {
                 ))}
                 <button onClick={addEtoSection} style={{ width: '100%', padding: '0.5rem', background: 'transparent', border: '1px dashed var(--border-color)', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>+ 添加段落</button>
 
-                <div style={{ display: 'flex', gap: '0.75rem', position: 'sticky', bottom: 0, background: 'var(--card-bg)', padding: '0.75rem 0' }}>
-                  <button className="btn btn-primary" style={{ flex: 1, padding: '0.8rem' }} onClick={handleApplyTemplate}>⚡ 应用到当前项目</button>
-                  <button className="btn" style={{ padding: '0.8rem', background: 'rgba(239,68,68,0.08)', color: 'var(--danger-color)', border: '1px solid rgba(239,68,68,0.3)' }} onClick={() => deleteTemplate(viewingTemplate.id)}>🗑️ 删除</button>
+                <div style={{ display: 'flex', gap: '0.75rem', position: 'sticky', bottom: 0, background: 'var(--card-bg)', padding: '0.75rem 0', borderTop: '1px solid var(--border-color)' }}>
+                  <button className="btn" style={{ flex: 1, padding: '0.8rem', background: '#10b981', color: 'white', border: 'none' }} onClick={handleUpdateTemplate}>💾 保存修改</button>
+                  <button className="btn btn-primary" style={{ flex: 1, padding: '0.8rem' }} onClick={handleApplyTemplate}>⚡ 应用到项目</button>
                 </div>
               </div>
             );
           })() : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              
+              {savedTemplates.length > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', background: 'var(--bg-color)', padding: '0.5rem 1rem', borderRadius: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text-main)' }}>
+                    <input 
+                      type="checkbox" 
+                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--primary-color)' }}
+                      checked={selectedTemplates.length === savedTemplates.length && savedTemplates.length > 0}
+                      onChange={e => {
+                        if (e.target.checked) setSelectedTemplates(savedTemplates.map(t => t.id));
+                        else setSelectedTemplates([]);
+                      }}
+                    />
+                    全选 ({selectedTemplates.length}/{savedTemplates.length})
+                  </label>
+                  {selectedTemplates.length > 0 && (
+                    <button 
+                      onClick={handleBulkDelete}
+                      style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger-color)', border: 'none', padding: '0.3rem 0.8rem', borderRadius: '100px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      🗑️ 删除选中的 {selectedTemplates.length} 个
+                    </button>
+                  )}
+                </div>
+              )}
+
               {savedTemplates.map(t => {
                 let abs = {};
                 try { const p = JSON.parse(t.framework); abs = p.abstract || {}; } catch {}
+                const isChecked = selectedTemplates.includes(t.id);
                 return (
-                  <div key={t.id} style={{ background: 'var(--code-bg)', borderRadius: '10px', padding: '1rem 1.25rem', border: '1px solid var(--border-color)', cursor: 'pointer', transition: 'all 0.2s' }}
-                    onClick={() => setViewingTemplate(t)}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <h4 style={{ margin: 0, fontSize: '0.95rem' }}>⚡ {t.name}</h4>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(t.created_at).toLocaleDateString()}</span>
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: isChecked ? 'var(--card-bg)' : 'var(--code-bg)', borderRadius: '10px', padding: '1rem 1.25rem', border: isChecked ? '1px solid var(--primary-color)' : '1px solid var(--border-color)', transition: 'all 0.2s', boxShadow: isChecked ? '0 0 0 1px var(--primary-color)' : 'none' }}>
+                    <input 
+                      type="checkbox" 
+                      style={{ cursor: 'pointer', width: '18px', height: '18px', accentColor: 'var(--primary-color)', flexShrink: 0 }}
+                      checked={isChecked}
+                      onChange={e => {
+                        if (e.target.checked) setSelectedTemplates(prev => [...prev, t.id]);
+                        else setSelectedTemplates(prev => prev.filter(id => id !== t.id));
+                      }}
+                    />
+                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setViewingTemplate(t)}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <h4 style={{ margin: 0, fontSize: '0.95rem' }}>⚡ {t.name}</h4>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(t.created_at).toLocaleDateString()}</span>
+                      </div>
+                      {abs.writing_strategy && <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{abs.writing_strategy}</p>}
+                      {abs.emotional_arc && <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem', color: 'var(--primary-color)' }}>🌊 {abs.emotional_arc}</p>}
                     </div>
-                    {abs.writing_strategy && <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{abs.writing_strategy}</p>}
-                    {abs.emotional_arc && <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem', color: 'var(--primary-color)' }}>🌊 {abs.emotional_arc}</p>}
                   </div>
                 );
               })}
@@ -509,7 +685,30 @@ export default function Workspace() {
             </div>
           </div>
           
-          <div style={{ marginTop: 'auto', paddingTop: '2rem' }}>
+          <div style={{ marginTop: 'auto', paddingTop: '1.5rem' }}>
+            
+            {availableTools.length > 0 && (
+              <div style={{ marginBottom: '1.5rem', background: 'var(--code-bg)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.75rem' }}>🧰 启用发散推演增强工具（支持实时搜网寻取灵感）</span>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  {availableTools.filter(t => t.is_active).map(tool => (
+                    <label key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedToolsForGen.includes(tool.name)}
+                        onChange={(e) => {
+                          if(e.target.checked) setSelectedToolsForGen(p => [...p, tool.name]);
+                          else setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+                        }}
+                        style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
+                      />
+                      {tool.name === 'web_search' ? '🌐 网络搜索信息' : tool.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <button className="btn btn-primary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem' }} onClick={generateOutline} disabled={isGeneratingOutline}>
               {isGeneratingOutline ? '正在脑暴并多发分路推演大纲...' : '生成智能多角大纲 ✨'}
             </button>
@@ -691,6 +890,27 @@ export default function Workspace() {
           </div>
           
           <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+            {availableTools.length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', display: 'block', marginBottom: '0.5rem' }}>⚙️ 结合工具生成终稿：</span>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                  {availableTools.filter(t => t.is_active).map(tool => (
+                    <label key={tool.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedToolsForGen.includes(tool.name)}
+                        onChange={(e) => {
+                          if(e.target.checked) setSelectedToolsForGen(p => [...p, tool.name]);
+                          else setSelectedToolsForGen(p => p.filter(n => n !== tool.name));
+                        }}
+                        style={{ cursor: 'pointer', accentColor: 'var(--primary-color)' }}
+                      />
+                      {tool.name === 'web_search' ? '🌐 启用全网事实/文献级检索' : tool.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
             <button className="btn btn-primary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem' }} onClick={() => generateContent(idx)} disabled={isGeneratingContent}>
                ⚡ 确认以上完美骨架映射并流转生成极品终稿 🚀
             </button>
@@ -803,7 +1023,139 @@ export default function Workspace() {
       );
     }
 
+    if (activePane === 'tools') {
+      return renderToolsPane();
+    }
   };
+
+  const handleToggleTool = async (id, is_active) => {
+    try {
+      const res = await axios.put(`/tools/${id}/toggle`, { is_active });
+      // Update local state
+      const refreshed = await axios.get('/tools');
+      setAvailableTools(refreshed.data);
+      setSelectedToolsForGen(refreshed.data.filter(t => t.is_active).map(t => t.name));
+    } catch (e) {
+      alert("开关失败：" + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const handleDeleteTool = async (id) => {
+    if (!window.confirm("确定移除此 MCP 接入节点？")) return;
+    try {
+      await axios.delete(`/tools/${id}`);
+      const refreshed = await axios.get('/tools');
+      setAvailableTools(refreshed.data);
+    } catch(e) {
+      alert("删除失败：" + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const handleAddMcp = async () => {
+    if (!mcpForm.name || !mcpForm.config) return alert("参数缺失");
+    try {
+      if (editingToolId) {
+        await axios.put(`/tools/${editingToolId}`, mcpForm);
+      } else {
+        await axios.post('/tools', mcpForm);
+      }
+      setMcpForm({ name: '', category: '内容库', config: '' });
+      setIsAddingMcp(false);
+      setEditingToolId(null);
+      const refreshed = await axios.get('/tools');
+      setAvailableTools(refreshed.data);
+    } catch(e) {
+      alert((editingToolId ? "更新" : "添加") + "失败：" + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const renderToolsPane = () => {
+    return (
+      <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: 0, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <h3 style={{ margin: 0 }}>🧰 全局工具库</h3>
+          <button className="btn" onClick={() => {
+            if (isAddingMcp && !editingToolId) {
+              setIsAddingMcp(false);
+            } else {
+              setMcpForm({ name: '', category: '内容库', config: '' });
+              setEditingToolId(null);
+              setIsAddingMcp(true);
+            }
+          }} style={{ padding: '0.4rem 0.8rem', background: (isAddingMcp && !editingToolId) ? 'var(--code-bg)' : 'var(--primary-color)', color: (isAddingMcp && !editingToolId) ? 'var(--text-main)' : 'white' }}>
+            {(isAddingMcp && !editingToolId) ? '取消接入' : '➕ 接入外部 MCP 节点'}
+          </button>
+        </div>
+
+        {isAddingMcp && (
+          <div style={{ background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', marginBottom: '2rem', border: '1px solid var(--primary-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h4 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--primary-color)' }}>{editingToolId ? '修改 MCP 服务配置' : '连接 Model Context Protocol 服务'}</h4>
+              {editingToolId && <button className="btn" onClick={() => { setIsAddingMcp(false); setEditingToolId(null); }} style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>取消修改</button>}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.3rem' }}>MCP 服务名/标识</label>
+                <input value={mcpForm.name} onChange={e => setMcpForm(p => ({...p, name: e.target.value}))} placeholder="例如：Private_Database" style={{ width: '100%' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.3rem' }}>工具分类</label>
+                <select value={mcpForm.category} onChange={e => setMcpForm(p => ({...p, category: e.target.value}))} style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', backgroundColor: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', outline: 'none' }}>
+                  <option value="内容库">内容库集成</option>
+                  <option value="搜索工具">高级搜索增强</option>
+                  <option value="逻辑推演">计算与逻辑演化</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.8rem', display: 'block', marginBottom: '0.3rem' }}>启动 Config 配置参数 (JSON)</label>
+              <textarea value={mcpForm.config} onChange={e => setMcpForm(p => ({...p, config: e.target.value}))} placeholder='{"mcp_endpoint": "http://127.0.0.1:8000/mcp", "api_key": "..."}' style={{ width: '100%', minHeight: '80px', fontFamily: 'monospace', fontSize: '0.8rem' }} />
+            </div>
+            <button className="btn btn-primary" onClick={handleAddMcp} style={{ marginTop: '1rem', width: '100%' }}>✅ {editingToolId ? '确认更新此节点' : '确认保存此节点'}</button>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+          {availableTools.map(t => (
+            <div key={t.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'var(--code-bg)', padding: '1.25rem', borderRadius: '12px', border: t.is_active ? '1px solid var(--primary-color)' : '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', background: t.type === 'BUILTIN' ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)', color: t.type === 'BUILTIN' ? '#10b981' : '#6366f1', padding: '0.2rem 0.5rem', borderRadius: '4px', fontWeight: 600 }}>{t.type} · {t.category}</span>
+                
+                {/* Custom Toggle Switch */}
+                <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '20px' }}>
+                  <input type="checkbox" checked={t.is_active} onChange={e => handleToggleTool(t.id, e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: t.is_active ? 'var(--primary-color)' : 'var(--border-color)', transition: '.4s', borderRadius: '34px' }}>
+                     <span style={{ position: 'absolute', height: '14px', width: '14px', left: t.is_active ? '22px' : '4px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%' }}></span>
+                  </span>
+                </label>
+              </div>
+              
+              <h4 style={{ margin: '0.5rem 0 0.25rem' }}>{t.name === 'web_search' ? '🌐 DuckDuckGo 智能检索' : t.name}</h4>
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                {t.name === 'web_search' ? 
+                 '内置安全实时网络爬行器，让大模型在写作或推演架构时自发抓取全网实效性资讯融入文案。' : 
+                 (t.config || '连接到外部的私有知识库 / 功能模块池')}
+              </p>
+
+              {t.type === 'MCP' && (
+                <div style={{ marginTop: 'auto', paddingTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--primary-color)', cursor: 'pointer' }} onClick={() => {
+                    setMcpForm({ name: t.name, category: t.category, config: t.config || '' });
+                    setEditingToolId(t.id);
+                    setIsAddingMcp(true);
+                  }}>⚙️ 配置</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--danger-color)', cursor: 'pointer' }} onClick={() => handleDeleteTool(t.id)}>🗑️ 移除节点</span>
+                </div>
+              )}
+            </div>
+          ))}
+          {availableTools.length === 0 && <div style={{ color: 'var(--text-muted)', padding: '2rem', textAlign: 'center', gridColumn: '1 / -1' }}>当前无可用工具，服务未初始化。</div>}
+        </div>
+      </div>
+    );
+  }
+
+
 
 
   const getMenuItemStyle = (id) => {
@@ -870,6 +1222,13 @@ export default function Workspace() {
           >
             <span>📚</span> 套路模板
             {savedTemplates.length > 0 && <span style={{ fontSize: '0.7rem', background: 'var(--primary-color)', color: 'white', borderRadius: '100px', padding: '0.1rem 0.45rem', marginLeft: 'auto' }}>{savedTemplates.length}</span>}
+          </div>
+
+          <div 
+            style={getMenuItemStyle('tools')}
+            onClick={() => setActivePane('tools')}
+          >
+            <span>🧰</span> 工具中心
           </div>
 
           <div 

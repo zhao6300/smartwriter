@@ -11,9 +11,13 @@ router.use(requireAuth);
 
 router.post('/outline', async (req: AuthRequest, res) => {
   try {
-    const { articleId, topic, audience, customStyle, existingVariants, generateCount } = req.body;
+    const { articleId, topic, audience, customStyle, existingVariants, generateCount, selectedTools } = req.body;
     if (!articleId) throw new Error("缺少有效的 articleId 项目凭证");
     const { openai, model_name } = await getOpenAIClient(req.user!.id);
+    
+    // Tools parsing
+    const agentTools = getActiveTools(selectedTools || []);
+    const openaiTools = agentTools.length > 0 ? agentTools.map(t => t.schema) : undefined;
 
     const count = generateCount || 3;
 
@@ -30,8 +34,8 @@ ${names}
 ⚠️决对要求：新生成的大纲必须采用与上述已存在变体完全不同的视角、打法和情感基调！不得复用相同的标题功能、论述结构或者情感走向。`;
     }
 
-    const prompt = `你是一个资深的微信公众号运营推手。你的核心任务是：基于主题，必须一次性设计并生成【绝对精确的 ${count} 份】截然不同的视角和打法的高质量推文大纲骨架，供下层系统自动接收处理。
-【强制警告】：返回的 JSON 中的 outlines 数组必须包含且只包含 ${count} 个对象，缺少将被重罚！
+    const prompt = `你是一个资深的微信公众号运营推手。你的核心任务是：基于主题，必须一次性设计并生成【绝对精确的 ${count} 份】截然不同的视角和打法的高质量推文大纲骨架，供下层系统自动接收处理。若启用了网络搜素，可以先搜索参考资料。
+【强制警告】：无论如何最终都必须直接输出符合 JSON 格式的数据。数组 outlines 必须包含且只包含 ${count} 个对象，缺少将被重罚！
 ${existingSection}
 《大纲变体命名规则》：variantName 必须简短有力（4-8字），直接体现这份大纲的核心策略，例如「情绪共鸣流」「干货拆解佬」「悬疑痛点中场0」等，不得用「变体N」初驾。
 必须输出符合以下 JSON 格式的数据：
@@ -48,17 +52,53 @@ ${existingSection}
   ]
 }
 
+除了 JSON 以外不要说多余的话！
+
 主题: ${topic}
 目标人群: ${audience || '无特定限制'}
 额外要求/特定风格: ${customStyle || '无特定风格设定（必须自由发挥多角度想象，在每个大纲中体现出明显差异）'}`;
 
-    const completion = await openai.chat.completions.create({
-      model: model_name,
-      messages: [{ role: 'system', content: prompt }],
-      response_format: { type: "json_object" },
-    });
+    let messages: any[] = [{ role: 'system', content: prompt }];
+    let outlineText = "{}";
 
-    const outlineText = completion.choices[0].message.content || '{}';
+    let maxLoops = 5;
+    while (maxLoops > 0) {
+      maxLoops--;
+      
+      const completion = await openai.chat.completions.create({
+        model: model_name,
+        messages,
+        tools: openaiTools,
+        tool_choice: "auto",
+        response_format: { type: "json_object" }
+      });
+
+      const msg = completion.choices[0].message;
+      messages.push(msg);
+
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls as any[]) {
+          const fnName = tc.function.name;
+          const args = JSON.parse(tc.function.arguments || '{}');
+          const tool = agentTools.find(t => t.name === fnName);
+          
+          let toolResult = "Tool execution failed or not found.";
+          if (tool) {
+            toolResult = await tool.execute(args);
+          }
+          
+          messages.push({
+            tool_call_id: tc.id,
+            role: "tool",
+            name: fnName,
+            content: toolResult
+          });
+        }
+      } else {
+        outlineText = msg.content || "{}";
+        break;
+      }
+    }
     
     const article = await prisma.article.update({
       where: { id: articleId },
@@ -75,36 +115,75 @@ ${existingSection}
   }
 });
 
+import { getActiveTools } from '../utils/tools';
+
 router.post('/generate', async (req: AuthRequest, res) => {
   try {
-    const { articleId, final_outline } = req.body;
+    const { articleId, final_outline, selectedTools } = req.body;
     const { openai, model_name } = await getOpenAIClient(req.user!.id);
     
+    // Tools parsing
+    const agentTools = getActiveTools(selectedTools || []);
+    const openaiTools = agentTools.length > 0 ? agentTools.map(t => t.schema) : undefined;
+
     const prompt = `你是资深金牌公众号撰稿人。请根据大纲撰写公众号推文。
-你可以使用Markdown排版。多加金句。
+你可以在撰写前通过提供的工具检索最新资料。你可以使用Markdown排版。多加金句。
 大纲内容如下：
 ${JSON.stringify(final_outline, null, 2)}`;
 
-    // Set headers for SSE
+    let messages: any[] = [{ role: 'system', content: prompt }];
+    let finalContent = "";
+
+    // Set headers for SSE immediately to avoid timeout
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    const stream = await openai.chat.completions.create({
-      model: model_name,
-      messages: [{ role: 'system', content: prompt }],
-      stream: true,
-    });
+    let maxLoops = 5;
+    while (maxLoops > 0) {
+      maxLoops--;
+      
+      const completion = await openai.chat.completions.create({
+        model: model_name,
+        messages,
+        tools: openaiTools,
+        tool_choice: "auto",
+        stream: false 
+      });
 
-    let fullContent = "";
-    for await (const chunk of stream) {
-      const text = chunk.choices[0]?.delta?.content || "";
-      if (text) {
-        fullContent += text;
-        res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      const msg = completion.choices[0].message;
+      messages.push(msg);
+
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        // Send a status update to frontend
+        const toolNames = msg.tool_calls.map((t: any) => t.function.name).join(', ');
+        res.write(`data: ${JSON.stringify({ text: `\n\n> 🤖 AI 正在使用工具 [${toolNames}] 检索资料...\n\n` })}\n\n`);
+
+        for (const tc of msg.tool_calls as any[]) {
+          const fnName = tc.function.name;
+          const args = JSON.parse(tc.function.arguments || '{}');
+          const tool = agentTools.find(t => t.name === fnName);
+          
+          let toolResult = "Tool execution failed or not found.";
+          if (tool) {
+            toolResult = await tool.execute(args);
+          }
+          
+          messages.push({
+            tool_call_id: tc.id,
+            role: "tool",
+            name: fnName,
+            content: toolResult
+          });
+        }
+      } else {
+        // AI yielded final text 
+        finalContent = msg.content || "";
+        res.write(`data: ${JSON.stringify({ text: finalContent })}\n\n`);
+        break; // break the loop and finish
       }
     }
-    
+
     res.write('event: end\ndata: {}\n\n');
     res.end();
 
@@ -121,7 +200,7 @@ ${JSON.stringify(final_outline, null, 2)}`;
       }
     }
     const contentName = req.body.contentName || '未命名成品';
-    contentsArray.push({ id: Date.now().toString(), name: contentName, content: fullContent });
+    contentsArray.push({ id: Date.now().toString(), name: contentName, content: finalContent });
 
     await prisma.article.update({
       where: { id: articleId },

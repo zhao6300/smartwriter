@@ -17,6 +17,7 @@ model User {
   AiConfigs     AiConfig[]
   Articles      Article[]
   Templates     Template[]
+  ToolPlugins   ToolPlugin[]
 }
 
 model AiConfig {
@@ -58,4 +59,16 @@ model SystemAiModel {
   base_url   String
   api_key    String
   created_at DateTime @default(now())
+}
+
+model ToolPlugin {
+  id         String   @id @default(uuid())
+  user_id    String
+  name       String
+  type       String   // "BUILTIN" | "MCP"
+  category   String   // "Search" | "Data" | "Utilities"
+  config     String?  // JSON string (e.g. { mcp_endpoint: "..." })
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  user       User     @relation(fields: [user_id], references: [id])
 }
