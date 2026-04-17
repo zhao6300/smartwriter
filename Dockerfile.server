@@ -1,0 +1,29 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy lock files and manifest to install root and server dependencies
+COPY package*.json ./
+COPY src/server/package*.json ./src/server/
+
+# Install dependencies
+RUN npm install
+
+# Copy Prisma schema specifically first for better caching
+COPY src/server/prisma ./src/server/prisma
+WORKDIR /app/src/server
+RUN npx prisma generate
+
+# Go back and copy the rest of the server code
+WORKDIR /app
+COPY src/server ./src/server
+
+# Build the Typescript app
+WORKDIR /app/src/server
+RUN npm run build
+
+# Expose backend port
+EXPOSE 3001
+
+# Apply prisma schema on startup and launch server
+CMD ["sh", "-c", "npx prisma db push && node dist/index.js"]

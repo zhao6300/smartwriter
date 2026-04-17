@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Build outputs (Docker should rebuild these inside the container)
+src/client/dist
+src/server/dist
+dist/
+
+# Local databases
+*.db
+*.db-journal
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production

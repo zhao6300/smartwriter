@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  agent-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: agent-server
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+    restart: unless-stopped
+    volumes:
+      # Persist SQLite databases across container restarts
+      - agent-db-data:/app/src/server/prisma
+
+  agent-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: agent-client
+    ports:
+      # Map container port 80 to host port 8080 (or change to 80 for production default)
+      - "8080:80"
+    restart: unless-stopped
+    depends_on:
+      - agent-server
+
+volumes:
+  agent-db-data:
+    name: agent-db-data
