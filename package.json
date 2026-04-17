@@ -1,0 +1,21 @@
+{
+  "name": "aicopywriter-agent",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "src/client",
+    "src/server"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev:client": "npm run dev --workspace=agent-client",
+    "dev:server": "npm run dev --workspace=agent-server",
+    "dev": "npx concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build:client": "npm run build --workspace=agent-client",
+    "build:server": "npm run build --workspace=agent-server",
+    "build": "npm run build:client && npm run build:server"
+  },
+  "devDependencies": {
+    "concurrently": "latest"
+  }
+}
